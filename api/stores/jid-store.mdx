@@ -1,7 +1,7 @@
 ---
-title: "Stores.JID — JID and Phone Number Mapping Store"
+title: "Stores.JID — Bidirectional LID and PN Mapping Store"
 sidebarTitle: "JID Store"
-description: "Stores.JID persists LID↔PN bidirectional mappings in SQLite, populated automatically from incoming messages."
+description: "Stores.JID persists bidirectional LID↔PN JID mappings in a local SQLite database, populated automatically from incoming message and connection events."
 ---
 
 The `Stores.JID` class maintains a persistent, bidirectional mapping between WhatsApp's two user identifier formats: LID JIDs (anonymous identifiers, e.g. `123456789@lid`) and PN JIDs (phone-number identifiers, e.g. `1234567890@s.whatsapp.net`). Mappings are discovered automatically from inbound message events and stored in a local SQLite database, allowing you to look up either form of a JID given the other at any time during the bot's lifetime.

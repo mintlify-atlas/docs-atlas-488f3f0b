@@ -1,5 +1,5 @@
 ---
-title: "Caching in WABotJS: LRU, TTL, and SQLite Stores"
+title: "WABotJS Caching: LRUCache, TTLCache, and SQLiteStore"
 sidebarTitle: "Caching"
 description: "Explore the three cache mechanisms in WABotJS — LRUCache, TTLCache, and SQLiteStore — and how they layer to balance speed with durability."
 ---
@@ -91,7 +91,7 @@ const cache = new Utils.TTLCache<string>(1000 * 60 * 10);
 
 ## SQLiteStore
 
-`Utils.SQLiteStore` provides durable, file-backed key-value storage using Node.js's built-in `node:sqlite` module. All values are stored as `Uint8Array` blobs, giving you complete freedom over serialisation format. When a `ttl` is provided the table gains an `expire` column and a background interval purges rows whose expiry has passed (running at most every 30 minutes). A `TTLCache` with a 10-minute TTL (or the store's own TTL if shorter) sits in front as an L1 cache, so repeated reads of hot keys never hit the disk.
+`Utils.SQLiteStore` provides durable, file-backed key-value storage using Node.js's built-in `node:sqlite` module. All values are stored as `Uint8Array` blobs, giving you complete freedom over serialisation format. When a `ttl` is provided the table gains an `expire` column and a background interval purges rows whose expiry has passed (running at most every 30 minutes). A `TTLCache` with a 10-minute TTL (or the store's own TTL if one is configured) sits in front as an L1 cache, so repeated reads of hot keys never hit the disk.
 
 The database is always opened with:
 ```sql

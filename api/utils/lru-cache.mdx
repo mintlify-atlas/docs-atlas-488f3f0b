@@ -1,7 +1,7 @@
 ---
-title: "Utils.LRUCache — In-Memory LRU Cache"
+title: "Utils.LRUCache — Capacity-Bounded In-Memory LRU Cache"
 sidebarTitle: "LRUCache"
-description: "LRUCache is a capacity-bounded in-memory cache that evicts the least-recently-used entry on overflow, backed by a Map."
+description: "LRUCache is a generic, capacity-bounded in-memory cache backed by a Map that evicts the least-recently-used entry when the capacity limit is reached."
 ---
 
 `Utils.LRUCache<V>` is a generic, capacity-bounded in-memory cache that implements a Least-Recently-Used eviction policy. When the cache is full and a new entry is inserted, the entry that was accessed least recently is automatically removed to make room. The implementation is backed by an insertion-ordered `Map` and moves entries to the tail on every read, so eviction candidates are always at the head.
@@ -33,7 +33,7 @@ new LRUCache<V>(capacity: number)
 get size(): number
 ```
 
-Returns the current number of entries in the cache.
+Returns the raw `Map` size — the total number of entries currently held in the cache, including any that may be pending eviction. No filtering is applied; every key tracked by the underlying `Map` is counted.
 
 ```typescript
 const cache = new Utils.LRUCache<number>(50);

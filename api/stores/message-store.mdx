@@ -1,7 +1,7 @@
 ---
-title: "Stores.Message — Message Cache Store Reference"
+title: "Stores.Message — Persistent WAProto Message Cache Store"
 sidebarTitle: "Message Store"
-description: "Stores.Message caches WAMessage payloads in SQLite with a 5-day TTL for Baileys retry support and message update merging."
+description: "Stores.Message persists WAProto.IMessage payloads in SQLite with a 5-day TTL, enabling Baileys message retry and incremental update merging."
 ---
 
 The `Stores.Message` class is a persistent cache of `WAProto.IMessage` payloads, stored in a local SQLite database with a five-day time-to-live. Its primary purpose is to satisfy the `getMessage` callback that Baileys requires in order to support message retry: when WhatsApp asks the client to re-send a message, Baileys calls `getMessage` with a message ID, and this store provides the original payload. As a secondary benefit, the store merges incoming `messages.update` patches so the cached payload stays up to date.

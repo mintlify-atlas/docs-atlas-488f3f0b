@@ -1,7 +1,7 @@
 ---
-title: "Send Messages and Reactions with WABotJS"
+title: "Sending Messages, Reactions, and Edits with WABotJS"
 sidebarTitle: "Sending Messages"
-description: "Learn how to reply, react, edit, delete, and mark messages as read, plus how to send to any chat using baileys.AnyMessageContent."
+description: "Learn how to reply, react, edit, delete, and mark messages as read using WABotJS message methods, plus how to send to any chat using AnyMessageContent."
 ---
 
 WABotJS exposes message-action methods directly on the `Message` object, so you can act on any incoming message with a single method call. For more control — such as starting a conversation in a chat where no message has arrived yet — you can also reach the underlying socket directly.
@@ -106,8 +106,9 @@ bot.onMessage(async (m) => {
 All send and reply methods accept `baileys.AnyMessageContent` as the `content` argument. WABotJS re-exports the complete Baileys library, so you can import any Baileys type directly from `wabotjs`.
 
 <Note>
-  WABotJS re-exports the full Baileys library. You can import Baileys types directly:
-  `import type { AnyMessageContent } from 'wabotjs'`.
+  WABotJS re-exports the full Baileys library as a namespace. You can access Baileys types via:
+  `import { baileys } from 'wabotjs'` and then reference `baileys.AnyMessageContent`, or import
+  directly from `baileys` with `import type { AnyMessageContent } from 'baileys'`.
 </Note>
 
 Below are the most common content shapes:

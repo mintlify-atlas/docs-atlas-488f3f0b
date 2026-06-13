@@ -1,5 +1,5 @@
 ---
-title: "Message — WABotJS Message Object Reference"
+title: "Message — WABotJS Incoming Message Object API Reference"
 sidebarTitle: "Message"
 description: "Message wraps a raw baileys.WAMessage with resolved sender, media metadata, quoted context, and action methods for reply, react, edit, and more."
 ---
@@ -231,7 +231,11 @@ bot.onMessage(async (m) => {
 download(): Promise<Buffer>
 ```
 
-Downloads the media payload and returns it as a decrypted `Buffer`. Throws if `url`, `key`, or `path` are `undefined` (i.e. the message is not a downloadable media message).
+Downloads the media payload and returns it as a decrypted `Buffer`. Throws if `url`, `key`, or `path` are `undefined` (i.e. the message is not a downloadable multimedia message):
+
+```
+Error: this message is not a downloadable multimedia message
+```
 
 ```typescript
 bot.onMessage(async (m) => {
@@ -244,7 +248,7 @@ bot.onMessage(async (m) => {
 
 <Warning>
   Always check `m.type` or `m.url` before calling `download()` to avoid
-  unhandled errors on non-media messages.
+  unhandled errors on non-multimedia messages.
 </Warning>
 
 ---

@@ -1,10 +1,10 @@
 ---
-title: "Utils.TTLCache — In-Memory TTL Cache"
+title: "Utils.TTLCache — In-Memory Cache with Time-to-Live Expiry"
 sidebarTitle: "TTLCache"
-description: "TTLCache is an in-memory time-to-live cache with automatic expiry cleanup and lazy expiration checks on every read."
+description: "TTLCache is a generic in-memory cache where every entry carries an expiry timestamp, with automatic background cleanup and expiry filtering on bulk reads."
 ---
 
-`Utils.TTLCache<V>` is a generic in-memory cache where every entry carries an expiry timestamp. An entry is considered expired once `Date.now()` surpasses `insertTime + ttl`. Expiry is enforced lazily on individual reads (`get`, `has`) and eagerly on bulk reads (`keys`, `values`, `entries`), which filter out any expired entries before returning results. A background `setInterval` cleaner also runs at the same interval as the TTL to sweep expired entries from the underlying `Map`, keeping memory usage bounded even when entries are never explicitly read.
+`Utils.TTLCache<V>` is a generic in-memory cache where every entry carries an expiry timestamp. An entry is considered expired once `Date.now()` surpasses `insertTime + ttl`. Expiry is **not** checked by `get()` — it returns the stored value regardless of whether the entry has expired. Expiry is enforced by `has()` (which returns `false` for expired entries) and by the bulk-read methods `keys()`, `values()`, and `entries()`, all of which filter out expired entries before returning results. A background `setInterval` cleaner also runs at the same interval as the TTL to sweep expired entries from the underlying `Map`, keeping memory usage bounded even when entries are never explicitly read.
 
 ## Import & construction
 
@@ -83,7 +83,7 @@ Returns the stored value for `key` regardless of expiry, or `undefined` if the k
 </Warning>
 
 ```typescript
-const value = cache.get('session'); // 'abc123' while not expired
+const value = cache.get('session'); // 'abc123' — returned regardless of expiry
 ```
 
 ### `del(key)`

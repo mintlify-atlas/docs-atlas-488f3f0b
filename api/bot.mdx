@@ -1,7 +1,7 @@
 ---
-title: "Bot — WABotJS Core Class Reference"
+title: "Bot — WABotJS Core Bot Class API Reference Guide"
 sidebarTitle: "Bot"
-description: "Bot is the main class in WABotJS — configure event handlers, manage lifecycle, and access cache, auth, and socket."
+description: "Bot is the main class in WABotJS — configure event handlers, manage the session lifecycle, and access the cache, auth, and socket."
 ---
 
 `Bot` is the central class of WABotJS. It manages the full lifecycle of a WhatsApp session: authenticating with Baileys, maintaining a persistent SQLite-backed credential store, routing incoming messages to your handlers, and automatically reconnecting when the connection drops. Every WABotJS project starts by instantiating a `Bot`.

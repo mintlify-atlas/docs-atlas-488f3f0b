@@ -1,7 +1,7 @@
 ---
-title: "Authenticate with WABotJS Using QR or OTP"
+title: "Authenticate Your WABotJS Bot with QR Code or OTP Pairing"
 sidebarTitle: "Authentication"
-description: "Learn how to connect your WABotJS bot using QR code scanning or phone-number OTP pairing, with automatic SQLite session persistence."
+description: "Learn how to connect your WABotJS bot using QR code scanning or phone-number OTP pairing, with automatic SQLite-backed session persistence."
 ---
 
 WABotJS supports two complementary login methods — QR code scanning and phone-number OTP pairing — so you can choose whichever fits your deployment. Either way, credentials are persisted automatically in an SQLite database under your `datadir`, meaning your bot survives restarts without requiring a fresh scan or code entry each time.
@@ -119,7 +119,7 @@ On the next `bot.login()` call the stored session is loaded from disk, and the b
 
 WABotJS distinguishes between **transient** and **permanent** disconnections.
 
-**Transient disconnections** (network blips, server restarts, `restartRequired`) trigger automatic reconnection with exponential back-off. The delay starts at **5 seconds** and doubles on each failure up to a maximum of **5 minutes**. No action is required from your code.
+**Transient disconnections** trigger automatic reconnection managed by WABotJS. For most transient failures, reconnection uses exponential back-off: the delay starts at **5 seconds** and doubles on each failure up to a maximum of **5 minutes**. The one exception is `restartRequired` — that code triggers an **immediate** reconnect with no delay. No action is required from your code in either case.
 
 **Permanent disconnections** call your `onClose` handler and then invoke `bot.logout()` to clear the stored session. The status codes that trigger a permanent disconnect are:
 

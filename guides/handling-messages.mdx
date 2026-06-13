@@ -1,7 +1,7 @@
 ---
-title: "Handle Incoming Messages in WABotJS"
+title: "Handling and Inspecting Incoming Messages with WABotJS"
 sidebarTitle: "Handling Messages"
-description: "Explore the onMessage callback, every field on the Message object, and patterns for filtering and inspecting incoming WhatsApp messages."
+description: "Explore the onMessage callback, every property on the Message object, and practical patterns for filtering and inspecting incoming WhatsApp messages."
 ---
 
 Every message that arrives in any chat your bot is part of is surfaced through a single `onMessage` callback. The callback receives a rich `Message` object that abstracts the raw Baileys payload and exposes pre-parsed fields for text, media metadata, sender identity, quoted context, and more.

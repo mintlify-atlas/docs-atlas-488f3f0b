@@ -1,7 +1,7 @@
 ---
-title: "Utils.SQLiteStore — Persistent Key-Value Store"
+title: "Utils.SQLiteStore — TTL-Aware Persistent Key-Value Store"
 sidebarTitle: "SQLiteStore"
-description: "SQLiteStore is a persistent key-value store backed by Node.js native SQLite with an optional TTL and in-memory read cache."
+description: "SQLiteStore is a Uint8Array-valued persistent key-value store backed by node:sqlite with an optional row-level TTL and a 10-minute in-memory L1 read cache."
 ---
 
 `Utils.SQLiteStore` is a string-keyed, `Uint8Array`-valued persistent store built on top of Node.js's built-in `node:sqlite` module (available since Node.js v22.5). It operates as a simple key-value table and, when a TTL is provided, adds an `expire` column and a periodic background cleaner that purges stale rows. An in-memory `TTLCache` with a 10-minute TTL sits in front of all SQLite reads, reducing latency for frequently accessed keys without sacrificing durability.

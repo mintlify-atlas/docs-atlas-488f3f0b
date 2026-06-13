@@ -1,7 +1,7 @@
 ---
-title: "Build Command Handlers with WABotJS"
+title: "Building Prefix-Based Command Handlers with WABotJS"
 sidebarTitle: "Command Routing"
-description: "Use onCommand to automatically parse a prefix, command name, and arguments from incoming messages and build structured command handlers."
+description: "Use the onCommand callback to automatically parse a prefix, command name, and argument list from incoming messages and build structured bot commands."
 ---
 
 WABotJS includes built-in command parsing so you don't have to manually split message text. Any message that begins with the configured prefix is automatically decomposed into a command name and an arguments array, then routed to your `onCommand` handler. This lets you build a structured command interface without writing boilerplate tokenisation logic.
@@ -143,15 +143,14 @@ bot.onCommand(async (m, prefix, name, args) => {
 Restrict sensitive commands to specific users by checking `m.sender` against an allow-list. The test suite uses a `Set<string>` populated in `onOpen`:
 
 ```typescript
-import Utils from 'wabotjs/utils'; // re-exported from wabotjs
-import { Bot } from 'wabotjs';
+import { Bot, Utils } from 'wabotjs';
 
 const bot = new Bot('my-bot', './data/my-bot');
 const owners = new Set<string>();
 
 bot.onOpen(async (user) => {
   // Resolve the bot account's own LID and treat it as owner
-  const lid = wabotjs.Utils.resolveLID(user.lid, user.id);
+  const lid = Utils.resolveLID(user.lid, user.id);
   if (lid) owners.add(lid);
 });
 

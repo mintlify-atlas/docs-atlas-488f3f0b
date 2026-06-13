@@ -1,7 +1,7 @@
 ---
-title: "Download and Send Media Messages with WABotJS"
+title: "Downloading and Sending WhatsApp Media with WABotJS"
 sidebarTitle: "Media"
-description: "Detect, download, and send image, video, audio, document, and sticker messages using WABotJS's media fields and the download() method."
+description: "Detect, download, and send image, video, audio, document, and sticker messages using WABotJS media fields and the download() method."
 ---
 
 WABotJS exposes all the information you need to work with media messages through fields on the `Message` object. You can inspect the content type and MIME type to decide how to handle each message, download the raw bytes as a `Buffer` with a single method call, and send any kind of media back using `m.reply()`.
@@ -56,6 +56,8 @@ Call `await m.download()` to fetch the media file and receive it as a `Node.js B
 </Warning>
 
 ```typescript
+import { writeFileSync } from 'node:fs';
+
 bot.onMessage(async (m) => {
   if (m.isFromMe()) return;
 
@@ -67,7 +69,6 @@ bot.onMessage(async (m) => {
     console.log(`Downloaded ${buffer.byteLength} bytes (${m.mimetype})`);
 
     // Example: save to disk
-    import { writeFileSync } from 'node:fs';
     const ext = m.mimetype?.split('/')[1] ?? 'bin';
     writeFileSync(`./downloads/${m.id}.${ext}`, buffer);
   } catch (err) {

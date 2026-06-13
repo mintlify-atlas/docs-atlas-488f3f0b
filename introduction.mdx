@@ -1,5 +1,5 @@
 ---
-title: "WABotJS: Build WhatsApp Bots with TypeScript"
+title: "WABotJS: TypeScript SDK for Building WhatsApp Bots"
 sidebarTitle: "Introduction"
 description: "WABotJS is a TypeScript SDK that wraps Baileys to let you build WhatsApp bots with session persistence, command routing, and message helpers."
 ---
@@ -52,6 +52,28 @@ WABotJS is a TypeScript library for building WhatsApp bots on top of [Baileys](h
 | **Node.js** | v24 or later — required for the built-in `node:sqlite` module |
 | **Project type** | ESM (`"type": "module"` in `package.json`) |
 | **TypeScript** | v5+ recommended — types are shipped with the package |
+
+## Package Exports
+
+WABotJS exposes the following named exports from `wabotjs`. Every export is available as both a named import and via the default object:
+
+```typescript
+import { Bot, Auth, Utils, Socket, Message, Stores, baileys, Constants } from 'wabotjs';
+// or
+import wabotjs from 'wabotjs';
+// wabotjs.Bot, wabotjs.Auth, wabotjs.Utils, wabotjs.Socket, etc.
+```
+
+| Export | Description |
+|---|---|
+| `Bot` | The primary class for creating and managing a WhatsApp bot instance. |
+| `Auth` | Handles loading, saving, and dropping authentication credentials to disk. |
+| `Utils` | A collection of helper functions (type guards, error coercion, TTLCache, LRU cache, delays, and more). |
+| `Socket` | A thin wrapper around the Baileys WebSocket client with WABotJS defaults applied. |
+| `Message` | Represents an incoming WhatsApp message with action helpers (`reply`, `edit`, `react`, `download`, etc.). |
+| `Stores` | Namespace containing the SQLite-backed `JID` and `Message` store classes used for caching. |
+| `baileys` | The full Baileys `7.0.0-rc13` library re-exported, so you can use Baileys types and helpers without a separate dependency. |
+| `Constants` | Internal constants used by WABotJS (e.g. `USER_AGENT` string). |
 
 ## Quick Links
 

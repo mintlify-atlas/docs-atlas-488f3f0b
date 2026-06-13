@@ -1,7 +1,7 @@
 ---
-title: "Auth — WABotJS Credential Management Reference"
+title: "Auth — WABotJS SQLite Credential Management Reference"
 sidebarTitle: "Auth"
-description: "Auth manages SQLite-backed WhatsApp session credentials and Baileys signal keys, with get/set/del helpers for the auth store."
+description: "Auth manages SQLite-backed WhatsApp session credentials and Baileys signal keys, with get/set/del helpers for custom auth store data."
 ---
 
 `Auth` manages the persistence layer for WhatsApp session data. It stores Baileys authentication credentials and Signal protocol keys in a SQLite file (`auth.sqlite`) using WAL journal mode and NORMAL sync for durability without excessive flushing. In normal usage you never instantiate `Auth` directly — it is accessible as `bot.auth` and the `Bot` class calls its methods automatically at the right points in the lifecycle.
@@ -91,7 +91,11 @@ This method is idempotent — repeated calls are no-ops once the store is loaded
 saveCreds(): void
 ```
 
-Persists the current in-memory `creds` object to the SQLite store under the `'creds'` key. Throws if `load()` has not been called.
+Persists the current in-memory `creds` object to the SQLite store under the `'creds'` key. Throws if `load()` has not been called:
+
+```
+Error: uninitialized creds, calling .load() first
+```
 
 `Bot` registers a listener on the Baileys `creds.update` event that calls `saveCreds()` automatically, so you should rarely need to call this directly.
 
@@ -120,13 +124,18 @@ Closes the database connection and deletes the `auth.sqlite` file (and associate
 dropCreds(): void
 ```
 
-Deletes **only** the `'creds'` row from the SQLite store without dropping the database file or the Signal key material. Resets the in-memory `creds` reference and the loaded flag.
+Deletes **only** the `'creds'` row from the SQLite store without dropping the database file or the Signal key material. Resets the in-memory `creds` reference and sets the `#loaded` flag to `false`. Throws if `load()` has not been called:
+
+```
+Error: uninitialized creds, calling .load() first
+```
 
 Use `dropCreds()` when you want to force a re-authentication (new QR or OTP) while preserving other stored keys.
 
 <Note>
-  After calling `dropCreds()`, calling `state` throws until `load()` is called
-  again, which will generate fresh credentials via `baileys.initAuthCreds()`.
+  After calling `dropCreds()`, accessing `auth.state` throws until `load()` is
+  called again, which will generate fresh credentials via
+  `baileys.initAuthCreds()`.
 </Note>
 
 ---
