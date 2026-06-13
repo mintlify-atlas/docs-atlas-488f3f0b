@@ -1,0 +1,198 @@
+---
+title: "Utils.LRUCache — In-Memory LRU Cache"
+sidebarTitle: "LRUCache"
+description: "LRUCache is a capacity-bounded in-memory cache that evicts the least-recently-used entry on overflow, backed by a Map."
+---
+
+`Utils.LRUCache<V>` is a generic, capacity-bounded in-memory cache that implements a Least-Recently-Used eviction policy. When the cache is full and a new entry is inserted, the entry that was accessed least recently is automatically removed to make room. The implementation is backed by an insertion-ordered `Map` and moves entries to the tail on every read, so eviction candidates are always at the head.
+
+## Import & construction
+
+```typescript
+import { Utils } from 'wabotjs';
+
+const cache = new Utils.LRUCache<string>(100);
+```
+
+## Constructor
+
+```typescript
+new LRUCache<V>(capacity: number)
+```
+
+<ParamField path="capacity" type="number" required>
+  Maximum number of entries the cache may hold at any time. Must be a positive
+  integer. Throws `TypeError` if the value is not a number or is less than `1`.
+</ParamField>
+
+## Properties
+
+### `size`
+
+```typescript
+get size(): number
+```
+
+Returns the current number of entries in the cache.
+
+```typescript
+const cache = new Utils.LRUCache<number>(50);
+cache.set('a', 1);
+cache.set('b', 2);
+console.log(cache.size); // 2
+```
+
+## Methods
+
+### `set(key, value)`
+
+```typescript
+set(key: string, value: V): this
+```
+
+Inserts or updates a key-value pair. If the key already exists it is moved to the most-recently-used position before the new value is stored. If the cache is at capacity after the insert, the least-recently-used entry is evicted. Returns `this` for chaining.
+
+<ParamField path="key" type="string" required>
+  Cache key. Must be a string — throws `TypeError` otherwise.
+</ParamField>
+<ParamField path="value" type="V" required>
+  Value to store.
+</ParamField>
+
+```typescript
+const cache = new Utils.LRUCache<string>(3);
+
+cache.set('x', 'foo').set('y', 'bar').set('z', 'baz');
+// Cache is now full: [x, y, z]
+
+cache.set('w', 'qux');
+// 'x' is evicted (LRU). Cache: [y, z, w]
+```
+
+### `get(key)`
+
+```typescript
+get(key: string): V | undefined
+```
+
+Returns the value associated with `key`, or `undefined` if the key is not present. Accessing an entry via `get` moves it to the most-recently-used position, refreshing it against eviction.
+
+<ParamField path="key" type="string" required>
+  Cache key to look up.
+</ParamField>
+
+```typescript
+const value = cache.get('y'); // 'bar'
+// 'y' is now the most-recently-used entry.
+```
+
+### `del(key)`
+
+```typescript
+del(key: string): boolean
+```
+
+Removes the entry with the given key. Returns `true` if the key existed and was deleted, `false` if it was not found.
+
+<ParamField path="key" type="string" required>
+  Cache key to delete.
+</ParamField>
+
+```typescript
+const removed = cache.del('y'); // true
+```
+
+### `has(key)`
+
+```typescript
+has(key: string): boolean
+```
+
+Returns `true` if the key exists in the cache, `false` otherwise. Does not affect recency order.
+
+```typescript
+console.log(cache.has('z')); // true
+console.log(cache.has('x')); // false (evicted)
+```
+
+### `clear()`
+
+```typescript
+clear(): void
+```
+
+Removes all entries from the cache.
+
+```typescript
+cache.clear();
+console.log(cache.size); // 0
+```
+
+### `keys()`
+
+```typescript
+keys(): string[]
+```
+
+Returns an array of all keys in least-recently-used to most-recently-used order.
+
+```typescript
+const cache = new Utils.LRUCache<number>(5);
+cache.set('a', 1);
+cache.set('b', 2);
+cache.get('a'); // refresh 'a'
+
+console.log(cache.keys()); // ['b', 'a']
+```
+
+### `values()`
+
+```typescript
+values(): V[]
+```
+
+Returns an array of all cached values in LRU-to-MRU order.
+
+```typescript
+console.log(cache.values()); // [2, 1]
+```
+
+### `entries()`
+
+```typescript
+entries(): [string, V][]
+```
+
+Returns an array of `[key, value]` tuples in LRU-to-MRU order.
+
+```typescript
+console.log(cache.entries());
+// [['b', 2], ['a', 1]]
+```
+
+## Eviction policy
+
+<Note>
+  The LRU eviction policy guarantees that the entry removed on overflow is
+  always the one that was least recently **accessed** — not the one that was
+  inserted longest ago. Calling `get()` on an entry refreshes its recency
+  position; calling `set()` on an existing key also moves it to the
+  most-recently-used position before updating its value.
+</Note>
+
+```typescript
+const cache = new Utils.LRUCache<string>(2);
+
+cache.set('a', 'alpha');
+cache.set('b', 'beta');
+
+// Touch 'a' so 'b' becomes the LRU entry
+cache.get('a');
+
+// Inserting 'c' evicts 'b', not 'a'
+cache.set('c', 'gamma');
+
+console.log(cache.has('a')); // true
+console.log(cache.has('b')); // false — evicted
+console.log(cache.has('c')); // true
+```

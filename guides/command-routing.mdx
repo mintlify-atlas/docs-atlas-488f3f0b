@@ -1,0 +1,175 @@
+---
+title: "Build Command Handlers with WABotJS"
+sidebarTitle: "Command Routing"
+description: "Use onCommand to automatically parse a prefix, command name, and arguments from incoming messages and build structured command handlers."
+---
+
+WABotJS includes built-in command parsing so you don't have to manually split message text. Any message that begins with the configured prefix is automatically decomposed into a command name and an arguments array, then routed to your `onCommand` handler. This lets you build a structured command interface without writing boilerplate tokenisation logic.
+
+## How It Works
+
+When an incoming message's `text` starts with the current prefix, WABotJS:
+
+1. Strips the prefix from the front of the text.
+2. Splits the remainder on whitespace.
+3. Takes the **first token**, lowercases it — that becomes `name`.
+4. Collects the **remaining tokens** as `args` (original casing preserved).
+5. Calls your `onCommand` handler with `(m, prefix, name, args)`.
+
+The default prefix is `'/'`. Change it at any time before or after login with `bot.setPrefix()`:
+
+```typescript
+bot.setPrefix('!'); // Commands now start with !
+```
+
+<Note>
+  The command name (`name`) is always **lowercased**, so `/Ping`, `/PING`, and `/ping` all yield
+  `name === 'ping'`. The elements of `args` preserve their original casing.
+</Note>
+
+## Registering a Command Handler
+
+`onCommand` takes a single async callback with the signature below. Register it before calling `bot.login()`:
+
+```typescript
+bot.onCommand(async (m, prefix, name, args) => {
+  // m       — the full Message object
+  // prefix  — the active prefix string (e.g. '/')
+  // name    — the lowercased command name (e.g. 'ping')
+  // args    — remaining tokens as string[] (e.g. ['hello', 'world'])
+});
+```
+
+Both `onMessage` and `onCommand` fire for the same message when it starts with the prefix — `onMessage` always fires first.
+
+## Building a Command Router
+
+For a small set of commands a simple `if`/`else if` chain is readable and explicit. The example below is based on the test suite that ships with WABotJS:
+
+```typescript
+import path from 'node:path';
+import { Bot } from 'wabotjs';
+
+const id = 'my-bot';
+const bot = new Bot(id, path.join(process.cwd(), 'data', id));
+
+bot.onError(async (err) => console.error(err));
+
+bot.onCommand(async (m, prefix, name, args) => {
+  try {
+    if (name === 'ping') {
+      const start = Date.now();
+      const res = await m.reply({ text: 'Pong!\n> ...ms' });
+      const ping = Math.max(0, Date.now() - start);
+      if (res) {
+        await res.edit({ text: `Pong!\n> ${ping}ms` });
+      }
+      return;
+    }
+
+    if (name === 'echo') {
+      const response = args.length > 0 ? args.join(' ') : 'Hello, World!';
+      await m.reply({ text: response });
+      return;
+    }
+
+    if (name === 'help') {
+      await m.reply({
+        text: [
+          `*Available commands* (prefix: \`${prefix}\`)`,
+          `${prefix}ping — Measure round-trip latency`,
+          `${prefix}echo [text] — Echo text back`,
+          `${prefix}help — Show this message`,
+        ].join('\n'),
+      });
+      return;
+    }
+
+    // Fallback: unknown command
+    await m.reply({ text: `The *${prefix + name}* command does not exist.` });
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+await bot.login();
+```
+
+<Tip>
+  For bots with many commands, use a `Map` keyed by command name for O(1) lookup instead of a long
+  `if`/`else` chain:
+
+  ```typescript
+  type Handler = (m: Message, prefix: string, args: string[]) => Promise<void>;
+  const commands = new Map<string, Handler>();
+
+  commands.set('ping', async (m, prefix, args) => {
+    await m.reply({ text: 'Pong!' });
+  });
+
+  commands.set('echo', async (m, prefix, args) => {
+    await m.reply({ text: args.join(' ') || 'Hello, World!' });
+  });
+
+  bot.onCommand(async (m, prefix, name, args) => {
+    const handler = commands.get(name);
+    if (handler) {
+      await handler(m, prefix, args);
+    } else {
+      await m.reply({ text: `Unknown command: ${prefix + name}` });
+    }
+  });
+  ```
+</Tip>
+
+## Handling Unknown Commands
+
+Always include a fallback branch so users get meaningful feedback instead of silence:
+
+```typescript
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'ping') {
+    await m.reply({ text: 'Pong!' });
+    return;
+  }
+
+  // Catch-all fallback
+  await m.reply({ text: `The *${prefix + name}* command does not exist.` });
+});
+```
+
+## Access Control
+
+Restrict sensitive commands to specific users by checking `m.sender` against an allow-list. The test suite uses a `Set<string>` populated in `onOpen`:
+
+```typescript
+import Utils from 'wabotjs/utils'; // re-exported from wabotjs
+import { Bot } from 'wabotjs';
+
+const bot = new Bot('my-bot', './data/my-bot');
+const owners = new Set<string>();
+
+bot.onOpen(async (user) => {
+  // Resolve the bot account's own LID and treat it as owner
+  const lid = wabotjs.Utils.resolveLID(user.lid, user.id);
+  if (lid) owners.add(lid);
+});
+
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'admin-only') {
+    if (!m.sender || !owners.has(m.sender)) {
+      await m.reply({ text: 'Permission denied!' });
+      return;
+    }
+    // ... privileged action
+    return;
+  }
+});
+
+await bot.login();
+```
+
+<Note>
+  `m.sender` is a LID string (e.g. `12345678901234567890@lid`) or `undefined` if the sender could
+  not be resolved. Always guard with a `!m.sender` check before comparing.
+</Note>

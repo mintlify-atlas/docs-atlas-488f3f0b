@@ -1,0 +1,188 @@
+---
+title: "JID and Phone Number Resolution in WABotJS"
+sidebarTitle: "JID Resolution"
+description: "Learn how WABotJS maps between LID and phone-number JIDs, how the JID store is populated, and how to resolve identifiers in your bot."
+---
+
+Modern WhatsApp identifies users in two different ways simultaneously: by their phone number and by an opaque long-form device identifier called a LID. WABotJS tracks both forms and provides a set of resolution utilities so your bot can work with either format transparently. Understanding how JID resolution works helps you write correct message routing logic and diagnose cases where a contact's identity cannot yet be determined.
+
+## Background
+
+WhatsApp JIDs come in several shapes, but for individual users only two matter at the application level:
+
+<CardGroup cols={2}>
+  <Card title="PN JID — phone-number based" icon="phone">
+    Format: `{country_code}{number}@s.whatsapp.net`
+
+    Example: `15551234567@s.whatsapp.net`
+
+    The traditional JID format, derived directly from the registered phone number.
+  </Card>
+  <Card title="LID JID — opaque identifier" icon="fingerprint">
+    Format: `{opaque_id}@lid`
+
+    Example: `1234567890123456789@lid`
+
+    A long-form identifier introduced by WhatsApp's multi-device and privacy architecture. It is stable across number changes and device migrations.
+  </Card>
+</CardGroup>
+
+Baileys exposes both identifiers on the same message via paired fields: `remoteJid` / `remoteJidAlt` for chat-level JIDs and `participant` / `participantAlt` for sender-level JIDs inside groups. WABotJS normalises toward LID where possible because it is the preferred modern identifier.
+
+Group JIDs (`@g.us`) and broadcast JIDs are a separate category and are **not** resolved by the JID store — they are used directly as-is.
+
+---
+
+## The JID Store
+
+`Stores.JID` (accessed as `bot.cache.jid`) is a persistent, bidirectional mapping table stored in `jid_store.sqlite` inside your `datadir`. It is backed by `Utils.SQLiteStore` with **no TTL**, so mappings accumulate permanently across bot restarts.
+
+### How it is populated
+
+The store attaches itself to the socket via `bind(sock)` during `bot.login()` and listens to two events:
+
+<Accordion title="messages.upsert">
+  For every incoming message whose `type` is `'notify'`, the store checks:
+
+  - If `m.key.remoteJid` and `m.key.remoteJidAlt` are both set, it calls `Utils.resolveLIDAndPN()` on the pair. If both a LID and a PN are found, the bidirectional mapping is written to SQLite.
+  - If `m.key.participant` and `m.key.participantAlt` are both set (group messages), the same resolution and storage logic runs for the participant pair.
+
+  A mapping is **only written once**: if either the LID or the PN key already exists in the store, the write is skipped to keep the table stable.
+</Accordion>
+
+<Accordion title="connection.update (open)">
+  Immediately after the connection opens, the store resolves the bot's own identity from `sock.user.id`, `sock.user.lid`, and `sock.user.phoneNumber`. If both a LID and a PN can be found, the bot's own mapping is stored — ensuring the bot's JID is always resolvable from the very first event.
+</Accordion>
+
+### Internal storage layout
+
+Each mapping is stored as **two rows** — one keyed by the LID and one keyed by the PN — so lookups in either direction are O(1) SQL point reads:
+
+```
+key                              value
+-------------------------------  --------------------------------
+1234567890123456789@lid          15551234567@s.whatsapp.net
+15551234567@s.whatsapp.net       1234567890123456789@lid
+```
+
+Values are stored as UTF-8 encoded bytes (`Uint8Array`) in a SQLite BLOB column, normalised through `baileys.jidNormalizedUser()` before writing.
+
+---
+
+## Resolving a JID
+
+Use `bot.cache.jid.resolve(jid)` to look up the counterpart of any known JID:
+
+```typescript
+// Resolve from a PN JID → get the LID
+const result = bot.cache.jid.resolve('15551234567@s.whatsapp.net');
+// → { lid: '1234567890123456789@lid', pn: '15551234567@s.whatsapp.net' }
+
+// Resolve from a LID JID → get the PN
+const result2 = bot.cache.jid.resolve('1234567890123456789@lid');
+// → { lid: '1234567890123456789@lid', pn: '15551234567@s.whatsapp.net' }
+
+// Unknown JID → undefined
+const result3 = bot.cache.jid.resolve('9999999999@s.whatsapp.net');
+// → undefined
+```
+
+**Signature:** `resolve(jid: string): { lid: string; pn: string } | undefined`
+
+`resolve()` accepts either a LID or a PN JID. If the input is not a recognised LID or PN format (determined by Baileys' `isLidUser()` and `isPnUser()` guards), it returns `undefined` immediately without querying SQLite.
+
+<Note>
+  Resolution depends on having previously seen both JID forms in the same message. Brand-new contacts or fresh accounts will return `undefined` until at least one message is exchanged that carries both `remoteJid` and `remoteJidAlt`.
+</Note>
+
+---
+
+## Utility functions
+
+WABotJS exports three standalone resolution helpers under `Utils` for use in your own code:
+
+### `Utils.resolveLID(...args)`
+
+Finds the **first LID JID** among its arguments (filtering out non-strings), normalises it with `baileys.jidNormalizedUser()`, and returns it. Returns `undefined` if no LID JID is found.
+
+```typescript
+import { Utils } from 'wabotjs';
+
+const lid = Utils.resolveLID(
+  '15551234567@s.whatsapp.net',  // PN — ignored
+  '1234567890123456789@lid',      // LID — returned
+);
+// → '1234567890123456789@lid'
+```
+
+### `Utils.resolvePN(...args)`
+
+Finds the **first PN JID** among its arguments, normalises it, and returns it. Returns `undefined` if no PN JID is found.
+
+```typescript
+import { Utils } from 'wabotjs';
+
+const pn = Utils.resolvePN(
+  '1234567890123456789@lid',        // LID — ignored
+  '15551234567@s.whatsapp.net',     // PN — returned
+);
+// → '15551234567@s.whatsapp.net'
+```
+
+### `Utils.resolveLIDAndPN(...args)`
+
+Calls both `resolveLID` and `resolvePN` on the same argument list. Returns `{ lid, pn }` **only if both** are found; otherwise returns `undefined`.
+
+```typescript
+import { Utils } from 'wabotjs';
+
+const result = Utils.resolveLIDAndPN(
+  '15551234567@s.whatsapp.net',
+  '1234567890123456789@lid',
+);
+// → { lid: '1234567890123456789@lid', pn: '15551234567@s.whatsapp.net' }
+
+const missing = Utils.resolveLIDAndPN('15551234567@s.whatsapp.net');
+// → undefined  (no LID in the arguments)
+```
+
+These helpers are used internally by `Stores.JID` and `Stores.Message`, but you can use them freely for any routing or normalisation logic in your bot.
+
+---
+
+## How Message uses resolution
+
+The `Message` class (the object passed to your `onMessage` and `onCommand` handlers) uses `Utils.resolveLID()` and `Utils.resolvePN()` internally when setting its `chat` and `sender` fields. Where both a LID and a PN appear on the raw Baileys message key, `Message` prefers the **LID** for `chat` and `sender` so your handler always receives the modern identifier format. This means you can pass `m.sender` or `m.chat` directly to `bot.cache.jid.resolve()` and expect a consistent result.
+
+```typescript
+bot.onMessage(async (m) => {
+  // m.sender is normalised to a LID where available
+  const mapping = bot.cache.jid.resolve(m.sender);
+  if (mapping) {
+    console.log('Phone number:', mapping.pn);
+  }
+});
+```
+
+---
+
+## Group JIDs
+
+Group JIDs use the `@g.us` suffix (e.g. `120363000000000001@g.us`). They are **not** handled by `Stores.JID` — `resolve()` returns `undefined` immediately for any JID that is not a LID or PN user. To work with group identity use `bot.sock.groupMetadata(groupJid)` or read from `bot.cache.metadata` directly.
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.chat.endsWith('@g.us')) {
+    // Group message — use cache.metadata, not cache.jid
+    const meta = bot.cache.metadata.has(m.chat)
+      ? bot.cache.metadata.get(m.chat)
+      : await bot.sock.groupMetadata(m.chat);
+
+    console.log('Group:', meta?.subject);
+  }
+});
+```
+
+<Note>
+  Resolution depends on seeing both JID forms together in the same message event. On a fresh account or with a contact you have never exchanged messages with, `resolve()` will return `undefined` until at least one message is received that carries both `remoteJid` / `remoteJidAlt` (or `participant` / `participantAlt`) simultaneously.
+</Note>

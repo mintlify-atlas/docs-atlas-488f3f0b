@@ -1,0 +1,182 @@
+---
+title: "Download and Send Media Messages with WABotJS"
+sidebarTitle: "Media"
+description: "Detect, download, and send image, video, audio, document, and sticker messages using WABotJS's media fields and the download() method."
+---
+
+WABotJS exposes all the information you need to work with media messages through fields on the `Message` object. You can inspect the content type and MIME type to decide how to handle each message, download the raw bytes as a `Buffer` with a single method call, and send any kind of media back using `m.reply()`.
+
+## Detecting Media Messages
+
+Check `m.type` to identify the kind of media in a message. Common type values are:
+
+| `m.type` | Description |
+|---|---|
+| `imageMessage` | Photo |
+| `videoMessage` | Video clip |
+| `audioMessage` | Audio file or voice note |
+| `documentMessage` | File attachment (PDF, ZIP, etc.) |
+| `stickerMessage` | Sticker (static or animated) |
+| `conversation` / `extendedTextMessage` | Plain text (no media) |
+
+You can also check that `m.url` is defined as a secondary guard — media messages always have a CDN URL, while text messages do not.
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.isFromMe()) return;
+
+  switch (m.type) {
+    case 'imageMessage':
+      console.log('Received an image, MIME:', m.mimetype);
+      break;
+    case 'videoMessage':
+      console.log('Received a video, MIME:', m.mimetype);
+      break;
+    case 'audioMessage':
+      console.log('Received audio, MIME:', m.mimetype);
+      break;
+    case 'documentMessage':
+      console.log('Received a document, MIME:', m.mimetype);
+      break;
+    case 'stickerMessage':
+      console.log('Received a sticker');
+      break;
+    default:
+      // Not a media message
+  }
+});
+```
+
+## Downloading Media
+
+Call `await m.download()` to fetch the media file and receive it as a `Node.js Buffer`. WABotJS handles CDN URL resolution and decryption using the `url`, `key`, and `path` fields internally.
+
+<Warning>
+  `m.download()` throws an `Error` with the message `"this message is not a downloadable multimedia message"` if `m.url`, `m.key`, or `m.path` are `undefined`. Always verify that the message is a media message before calling it.
+</Warning>
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.isFromMe()) return;
+
+  // Guard: only proceed for downloadable media
+  if (!m.url || !m.key || !m.path) return;
+
+  try {
+    const buffer = await m.download();
+    console.log(`Downloaded ${buffer.byteLength} bytes (${m.mimetype})`);
+
+    // Example: save to disk
+    import { writeFileSync } from 'node:fs';
+    const ext = m.mimetype?.split('/')[1] ?? 'bin';
+    writeFileSync(`./downloads/${m.id}.${ext}`, buffer);
+  } catch (err) {
+    console.error('Download failed:', err);
+  }
+});
+```
+
+<Tip>
+  Check `m.mimetype` to distinguish between audio formats. For example, WhatsApp voice notes use
+  `audio/ogg; codecs=opus`, whereas regular audio file attachments may use `audio/mp4` or
+  `audio/mpeg`. Use this to choose the correct file extension or decoder.
+</Tip>
+
+## Sending Media
+
+Send media back to any chat using `m.reply()` with the appropriate `baileys.AnyMessageContent` shape. Read the file into a `Buffer` first — from disk, a network request, or the result of `m.download()`.
+
+<CodeGroup>
+
+```typescript Image
+import { readFileSync } from 'node:fs';
+
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'photo') {
+    const buffer = readFileSync('./assets/photo.jpg');
+    await m.reply({
+      image: buffer,
+      caption: 'Here is the photo you requested!',
+    });
+  }
+});
+```
+
+```typescript Video
+import { readFileSync } from 'node:fs';
+
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'video') {
+    const buffer = readFileSync('./assets/clip.mp4');
+    await m.reply({
+      video: buffer,
+      caption: 'Here is the video clip!',
+    });
+  }
+});
+```
+
+```typescript Audio
+import { readFileSync } from 'node:fs';
+
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'audio') {
+    const buffer = readFileSync('./assets/track.mp4');
+    await m.reply({
+      audio: buffer,
+      mimetype: 'audio/mp4',
+    });
+  }
+});
+```
+
+```typescript Document
+import { readFileSync } from 'node:fs';
+
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'pdf') {
+    const buffer = readFileSync('./assets/report.pdf');
+    await m.reply({
+      document: buffer,
+      mimetype: 'application/pdf',
+      fileName: 'report.pdf',
+    });
+  }
+});
+```
+
+</CodeGroup>
+
+## Media Message Fields
+
+The following `Message` fields are populated for media messages and `undefined` for plain-text messages:
+
+<ResponseField name="type" type="string | undefined">
+  Baileys content-type key identifying the media kind (e.g. `imageMessage`, `videoMessage`,
+  `audioMessage`, `documentMessage`, `stickerMessage`). Unwrapped through ephemeral and view-once
+  wrappers automatically.
+</ResponseField>
+
+<ResponseField name="mimetype" type="string | undefined">
+  MIME type reported by WhatsApp for the media file, e.g. `"image/jpeg"`, `"video/mp4"`,
+  `"audio/ogg; codecs=opus"`. Use this to pick the right file extension or processing pipeline.
+</ResponseField>
+
+<ResponseField name="hash" type="Buffer | undefined">
+  The `fileSha256` checksum of the media file as a `Buffer`. Useful for deduplication or integrity
+  verification after download.
+</ResponseField>
+
+<ResponseField name="key" type="Buffer | undefined">
+  The `mediaKey` `Buffer` used to decrypt the downloaded ciphertext. Required internally by
+  `m.download()`.
+</ResponseField>
+
+<ResponseField name="url" type="URL | undefined">
+  A `URL` object pointing to the WhatsApp CDN location of the encrypted media file.
+</ResponseField>
+
+<ResponseField name="path" type="string | undefined">
+  The `directPath` string that complements `url` for media resolution. Required internally by
+  `m.download()`.
+</ResponseField>

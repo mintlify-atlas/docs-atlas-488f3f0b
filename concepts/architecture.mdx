@@ -1,0 +1,199 @@
+---
+title: "WABotJS Architecture and Component Overview"
+sidebarTitle: "Architecture"
+description: "Understand how Bot, Auth, Socket, Stores, and Baileys fit together to form WABotJS's layered, event-driven WhatsApp bot architecture."
+---
+
+WABotJS is built around a small set of well-defined layers that each own exactly one responsibility. Your application code talks only to `Bot`; everything below that boundary — the WebSocket connection, credential persistence, JID mapping, and message caching — is managed internally. This page walks through every layer from top to bottom so you know where each concern lives and how the pieces wire together at runtime.
+
+## Component diagram
+
+```
+Your code
+    │
+    ▼
+┌───────────────────────────────────────────────────────────┐
+│  Bot                                                      │
+│  ├── Auth ──────────────────► SQLite (auth.sqlite)        │
+│  ├── Socket ────────────────► baileys.makeWASocket         │
+│  │                                   │                    │
+│  │                                   ▼                    │
+│  │                         WhatsApp Web WebSocket          │
+│  └── cache                                                │
+│       ├── cache.jid ────────► SQLite (jid_store.sqlite)   │
+│       ├── cache.message ────► SQLite (message_store.sqlite)│
+│       └── cache.metadata ──► TTLCache<GroupMetadata>      │
+│                               (in-memory, 10 min TTL)     │
+└───────────────────────────────────────────────────────────┘
+```
+
+Every file that the stores and auth layer write to lives inside the `datadir` you pass to `new Bot(id, datadir)`. Nothing is written outside that directory.
+
+---
+
+## Bot
+
+`Bot` is the single entry point for your application. You construct one instance, register event handlers, and call `.login()`. Internally, `Bot`:
+
+- Resolves the `datadir` to an absolute path and constructs `Auth`, `Stores.JID`, `Stores.Message`, and a `TTLCache<GroupMetadata>`.
+- Calls `Auth.load()` then creates a `Socket` with the loaded credentials.
+- Calls `.bind(sock)` on both the JID and Message stores so they start listening to socket events.
+- Wires `creds.update`, `connection.update`, and `messages.upsert` listeners.
+- Exposes chainable handler setters: `.onError()`, `.onQR()`, `.onOTP()`, `.onOpen()`, `.onClose()`, `.onMessage()`, and `.onCommand()`.
+
+```typescript
+import { Bot } from 'wabotjs';
+
+const bot = new Bot('my-bot', './data');
+
+bot
+  .onQR(async (qr) => { /* render QR */ })
+  .onOpen(async (user) => console.log('Connected as', user.id))
+  .onMessage(async (m) => { /* handle message */ })
+  .onCommand(async (m, prefix, name, args) => { /* handle command */ });
+
+await bot.login();
+```
+
+`Bot` also exposes `.close()` (drops the socket without clearing credentials) and `.logout()` (drops the socket *and* wipes credentials from disk).
+
+---
+
+## Socket
+
+`Socket` is a thin, typed wrapper around `baileys.makeWASocket`. When constructed it spreads all Baileys socket properties onto itself (giving you the full Baileys API surface), then overrides `end` and `logout` with typed async methods:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `end` | `(reason?: Error) => Promise<void>` | Gracefully closes the WebSocket. |
+| `logout` | `(reason?: Error) => Promise<void>` | Deregisters the device from WhatsApp, then closes. |
+
+You do not construct `Socket` yourself — `Bot` creates it during `.login()`. You can access the live socket via `bot.sock` for any Baileys API call (sending messages, fetching group metadata, etc.) after the connection is open.
+
+<Note>
+  Accessing `bot.sock` before calling `bot.login()` throws an error. Always wait for the `onOpen` callback before using socket methods.
+</Note>
+
+---
+
+## Auth
+
+`Auth` owns all credential and signal-key storage. It writes to a single SQLite file (`auth.sqlite`) inside your `datadir` using Node.js's built-in `node:sqlite` module. Key design decisions:
+
+<CardGroup cols={2}>
+  <Card title="WAL journal mode" icon="database">
+    The database is opened with `PRAGMA journal_mode = WAL` so reads never block writes.
+  </Card>
+  <Card title="NORMAL synchronous" icon="shield-check">
+    `PRAGMA synchronous = NORMAL` balances durability with write performance on modern file systems.
+  </Card>
+  <Card title="Atomic key updates" icon="lock">
+    Signal key batch writes are wrapped in an explicit `BEGIN TRANSACTION … COMMIT` block (with `ROLLBACK` on error) so partial updates never corrupt the key store.
+  </Card>
+  <Card title="Baileys BufferJSON" icon="code">
+    Credentials and keys are serialised with `baileys.BufferJSON.replacer/reviver` so binary data round-trips correctly through JSON → UTF-8 bytes → SQLite BLOB.
+  </Card>
+</CardGroup>
+
+Auth is loaded once at the start of `.login()`. If no existing credentials are found, `baileys.initAuthCreds()` produces a fresh set. On every `creds.update` event the bot calls `auth.saveCreds()` to persist the latest credentials.
+
+---
+
+## Stores
+
+WABotJS ships two persistent stores, both built on `Utils.SQLiteStore`:
+
+### JID Store (`cache.jid`)
+
+`Stores.JID` maintains a **bidirectional** mapping between LID JIDs (`@lid`) and phone-number JIDs (`@s.whatsapp.net`) in `jid_store.sqlite`. Mappings are populated automatically from:
+
+- `messages.upsert` events — when a message carries both `remoteJid` and `remoteJidAlt` (or `participant` and `participantAlt`), the pair is stored.
+- `connection.update` (open) events — the bot's own `user.id` / `user.lid` pair is always stored on connect.
+
+The store is **append-only**: once a pair is written it is never overwritten, keeping the mapping stable across reconnects.
+
+### Message Store (`cache.message`)
+
+`Stores.Message` stores serialised `WAProto.IMessage` objects keyed by message ID in `message_store.sqlite`. It has a **5-day TTL** (432,000,000 ms) and is used exclusively by Baileys' `getMessage` callback, which Baileys calls when it needs to re-decrypt a message during a retry or history sync.
+
+`Buffer` and `Uint8Array` values are serialised with a custom JSON replacer that converts them to tagged plain-object form (`{ type: 'Buffer', data: [...] }`) so they survive JSON round-trips through the UTF-8 BLOB column.
+
+---
+
+## Cache layers
+
+Every `SQLiteStore` instance pairs an in-memory `TTLCache` (L1) with SQLite (L2):
+
+```
+get(key)
+  │
+  ├─► L1: TTLCache (10 min default, or store's own TTL if set)
+  │       hit → return immediately
+  │
+  └─► L2: SQLite  (filtered by expire column if TTL is set)
+              hit → backfill L1, return
+              miss → return undefined
+```
+
+On `set(key, value)` the value is written to **both** L1 and L2 atomically. On `del(key)` it is removed from both. This means repeated reads of recently-written keys (e.g. auth keys refreshed on every message) never touch the disk.
+
+The L1 `TTLCache` uses a background `setInterval` cleaner (unref'd so it does not prevent process exit) that sweeps expired entries every `ttl` milliseconds. When the cache becomes empty the interval is stopped automatically.
+
+---
+
+## Reconnection strategy
+
+When the socket closes with a non-permanent error code, `Bot` reconnects with **exponential back-off**:
+
+| Parameter | Value |
+|-----------|-------|
+| Initial delay | 5,000 ms (5 s) |
+| Growth factor | ×2 on each failure |
+| Maximum delay | 300,000 ms (5 min) |
+
+The delay resets to 5 s every time the connection opens successfully.
+
+Some disconnect codes are **permanent** — they indicate the session is irrecoverably invalid and reconnecting would not help. On a permanent code `Bot` calls `onClose` and then `logout()` instead of retrying:
+
+<CardGroup cols={2}>
+  <Card title="loggedOut" icon="arrow-right-from-bracket">
+    The account explicitly logged out this device.
+  </Card>
+  <Card title="forbidden" icon="ban">
+    WhatsApp rejected the session (banned or policy violation).
+  </Card>
+  <Card title="405" icon="circle-xmark">
+    Method not allowed — session is no longer valid.
+  </Card>
+  <Card title="400" icon="triangle-exclamation">
+    Bad request — malformed session state.
+  </Card>
+</CardGroup>
+
+`restartRequired` is handled as a special **non-delayed** case: the bot calls `.login()` immediately without incrementing the retry delay.
+
+---
+
+## Event flow
+
+Understanding how events travel through the stack helps you reason about the order in which your callbacks fire.
+
+<Accordion title="messages.upsert — incoming messages and commands">
+  1. Baileys emits `messages.upsert` with `type: 'notify'`.
+  2. `Stores.JID` inspects each message for `remoteJidAlt` / `participantAlt` pairs and writes any new LID↔PN mappings to SQLite.
+  3. `Stores.Message` stores each message's `WAProto.IMessage` payload in SQLite.
+  4. `Bot` wraps the raw Baileys message in a `Message` instance and calls your `onMessage` handler.
+  5. If the message text begins with the configured prefix, `Bot` parses the command name and arguments, then calls your `onCommand` handler.
+
+  All user-provided callbacks are `.catch()`-chained into `onError` so a throw inside your handler does not crash the process.
+</Accordion>
+
+<Accordion title="connection.update — login and reconnect lifecycle">
+  1. When `u.qr` is set and a phone number was supplied to `.login(pn)` but the device is not yet registered, Bot calls `sock.requestPairingCode(pn)` and delivers the code to your `onOTP` handler. Otherwise it delivers the raw QR string to `onQR`.
+  2. When `u.connection === 'close'`, Bot inspects `u.lastDisconnect.error` as a Boom status code. Permanent codes trigger `onClose` + `logout()`; all others trigger a delayed or immediate `.login()` retry.
+  3. When `u.connection === 'open'`, `Stores.JID` stores the bot's own LID↔PN pair, the retry delay resets to 5 s, and your `onOpen` handler fires.
+</Accordion>
+
+<Accordion title="creds.update — credential persistence">
+  Baileys emits `creds.update` whenever the authentication state changes (e.g. after pairing, after a key rotation). `Bot` immediately calls `auth.saveCreds()`, which serialises the current `AuthenticationCreds` to `auth.sqlite`. Signal keys are updated in the `keys.set` callback wrapped in a transaction.
+</Accordion>

@@ -1,0 +1,154 @@
+---
+title: "Authenticate with WABotJS Using QR or OTP"
+sidebarTitle: "Authentication"
+description: "Learn how to connect your WABotJS bot using QR code scanning or phone-number OTP pairing, with automatic SQLite session persistence."
+---
+
+WABotJS supports two complementary login methods — QR code scanning and phone-number OTP pairing — so you can choose whichever fits your deployment. Either way, credentials are persisted automatically in an SQLite database under your `datadir`, meaning your bot survives restarts without requiring a fresh scan or code entry each time.
+
+## QR Code Login
+
+The default login flow displays a QR code that you scan with the WhatsApp mobile app. Provide an `onQR` handler before calling `bot.login()` to receive the raw QR string; you can render it in the terminal with the `qrcode` package.
+
+```bash
+npm install qrcode
+```
+
+```typescript
+import path from 'node:path';
+import qrcode from 'qrcode';
+import { Bot } from 'wabotjs';
+
+const id = 'my-bot';
+const datadir = path.join(process.cwd(), 'data', id);
+const bot = new Bot(id, datadir);
+
+bot.onError(async (err) => {
+  console.error('Bot error:', err);
+});
+
+bot.onQR(async (str) => {
+  // Render the QR code as a small terminal graphic
+  const terminal = await qrcode.toString(str, { type: 'terminal', small: true });
+  console.log(terminal);
+});
+
+bot.onOpen(async (user) => {
+  // user: baileys.Contact — { id, lid, name, phoneNumber }
+  console.log('Connected as', user.name, user.phoneNumber);
+});
+
+await bot.login(); // No phone number → QR flow
+```
+
+When WhatsApp acknowledges the scan, `onOpen` fires with a `baileys.Contact` object describing the authenticated account. The `user` parameter exposes `.id`, `.lid`, `.name`, and `.phoneNumber`.
+
+## Phone Number (OTP) Login
+
+If you pass a phone number (with country code) to `bot.login()` and no saved credentials exist yet, WABotJS skips the QR step and requests an 8-digit pairing code instead. Register an `onOTP` handler to receive the code, then enter it in **WhatsApp → Linked devices → Link with phone number**.
+
+```typescript
+import path from 'node:path';
+import { Bot } from 'wabotjs';
+
+const id = 'my-bot';
+const datadir = path.join(process.cwd(), 'data', id);
+const bot = new Bot(id, datadir);
+
+bot.onError(async (err) => {
+  console.error('Bot error:', err);
+});
+
+bot.onOTP(async (code) => {
+  // code is an 8-digit string, e.g. "12345678"
+  console.log('Enter this code in WhatsApp → Linked devices:', code);
+});
+
+bot.onOpen(async (user) => {
+  console.log('Connected as', user.name);
+});
+
+await bot.login('+15551234567'); // E.164 format with country code
+```
+
+<Note>
+  If credentials for this `datadir` are already registered, the phone number is ignored and the
+  existing session is resumed directly — `onOTP` will **not** fire.
+</Note>
+
+## Choosing Between QR and OTP
+
+<Tabs>
+  <Tab title="QR Code">
+    ```typescript
+    bot.onQR(async (str) => {
+      const terminal = await qrcode.toString(str, { type: 'terminal', small: true });
+      console.log(terminal);
+    });
+
+    await bot.login(); // omit phone number
+    ```
+
+    Best when you are running the bot interactively and can scan from your phone. The QR code expires after **30 seconds**; if it times out a new one is issued automatically during the next reconnect cycle.
+  </Tab>
+  <Tab title="Phone Number (OTP)">
+    ```typescript
+    bot.onOTP(async (code) => {
+      console.log('Pairing code:', code);
+    });
+
+    await bot.login('+15551234567');
+    ```
+
+    Best for headless or CI environments where scanning is impractical. Enter the received code in WhatsApp within the displayed time window.
+  </Tab>
+</Tabs>
+
+## Session Persistence
+
+WABotJS stores all credentials and signal keys in a single SQLite file at `{datadir}/auth.sqlite`. The `Auth` class writes to that database automatically every time WhatsApp fires a `creds.update` event — you never need to call a save function yourself.
+
+On the next `bot.login()` call the stored session is loaded from disk, and the bot reconnects transparently without showing a QR code or sending an OTP. This means your bot can restart (e.g. after a deployment or crash) and reconnect in seconds.
+
+<Note>
+  Keep `datadir` **private and backed up**. The `auth.sqlite` file contains your WhatsApp session
+  credentials. Anyone who has access to it can impersonate your linked device.
+</Note>
+
+## Handling Disconnection
+
+WABotJS distinguishes between **transient** and **permanent** disconnections.
+
+**Transient disconnections** (network blips, server restarts, `restartRequired`) trigger automatic reconnection with exponential back-off. The delay starts at **5 seconds** and doubles on each failure up to a maximum of **5 minutes**. No action is required from your code.
+
+**Permanent disconnections** call your `onClose` handler and then invoke `bot.logout()` to clear the stored session. The status codes that trigger a permanent disconnect are:
+
+| Status code | Meaning |
+|---|---|
+| `loggedOut` | User removed the linked device in WhatsApp |
+| `forbidden` | Account action blocked by WhatsApp |
+| `405` | Method not allowed (server-side rejection) |
+| `400` | Bad request (usually an invalid session state) |
+
+```typescript
+bot.onClose(async (err) => {
+  // err is a boom.Output: { statusCode, payload, headers }
+  console.error('Permanently disconnected:', err.statusCode, err.payload.message);
+  // Clean up resources, notify an admin, etc.
+});
+```
+
+## Logging Out vs. Closing
+
+<Steps>
+  <Step title="bot.logout()">
+    Sends a logout request to WhatsApp, removes all event listeners, and **deletes** the
+    `auth.sqlite` file via `auth.drop()`. Use this when you want to unlink the device entirely.
+    The next `bot.login()` will start a fresh QR / OTP flow.
+  </Step>
+  <Step title="bot.close()">
+    Closes the underlying WebSocket connection and removes event listeners, but **preserves**
+    `auth.sqlite`. The session remains valid; the next `bot.login()` will resume it without
+    re-authenticating.
+  </Step>
+</Steps>

@@ -1,0 +1,180 @@
+---
+title: "Handle Incoming Messages in WABotJS"
+sidebarTitle: "Handling Messages"
+description: "Explore the onMessage callback, every field on the Message object, and patterns for filtering and inspecting incoming WhatsApp messages."
+---
+
+Every message that arrives in any chat your bot is part of is surfaced through a single `onMessage` callback. The callback receives a rich `Message` object that abstracts the raw Baileys payload and exposes pre-parsed fields for text, media metadata, sender identity, quoted context, and more.
+
+## The `onMessage` Callback
+
+Register your handler before calling `bot.login()`. WABotJS fires it for every event with `type === 'notify'` in the underlying `messages.upsert` Baileys event — this covers new incoming messages in private chats and groups. Protocol messages (e.g. delivery receipts) are filtered out automatically.
+
+```typescript
+import path from 'node:path';
+import { Bot } from 'wabotjs';
+
+const bot = new Bot('my-bot', path.join(process.cwd(), 'data', 'my-bot'));
+
+bot.onMessage(async (m) => {
+  console.log(`[${new Date(m.timestamp * 1000).toISOString()}] ${m.chat}: ${m.text}`);
+});
+
+await bot.login();
+```
+
+## Message Fields
+
+Every `Message` instance exposes the following fields:
+
+<ResponseField name="id" type="string" required>
+  Unique identifier for the message, sourced from `raw.key.id`.
+</ResponseField>
+
+<ResponseField name="chat" type="string" required>
+  The JID of the conversation. This is the **group JID** for group messages, or the sender's **LID**
+  (Linked ID) for private chats. WABotJS resolves phone-number JIDs to LIDs using the internal JID
+  cache where possible.
+</ResponseField>
+
+<ResponseField name="sender" type="string | undefined">
+  The LID of the message author. For messages sent by the bot itself, this is the bot account's LID.
+  For group messages it is the participant's LID. May be `undefined` if the JID cannot be resolved.
+</ResponseField>
+
+<ResponseField name="text" type="string | undefined">
+  The text body or media caption, trimmed of leading/trailing whitespace. `undefined` for purely
+  media messages without a caption, or protocol messages with no displayable content.
+</ResponseField>
+
+<ResponseField name="mentions" type="string[]">
+  Array of JIDs that were `@`-mentioned in the message. Phone-number JIDs are resolved to LIDs via
+  the internal cache; unresolvable JIDs are included as-is.
+</ResponseField>
+
+<ResponseField name="timestamp" type="number" required>
+  Unix timestamp in **seconds** indicating when the message was sent.
+</ResponseField>
+
+<ResponseField name="type" type="string | undefined">
+  The Baileys content-type key for the message (e.g. `"conversation"`, `"imageMessage"`,
+  `"videoMessage"`, `"audioMessage"`, `"documentMessage"`, `"stickerMessage"`). Unwrapped through
+  view-once and ephemeral containers so you always get the innermost content type.
+</ResponseField>
+
+<ResponseField name="mimetype" type="string | undefined">
+  MIME type string for media messages, e.g. `"image/jpeg"`, `"video/mp4"`, `"audio/ogg; codecs=opus"`.
+  `undefined` for non-media messages.
+</ResponseField>
+
+<ResponseField name="hash" type="Buffer | undefined">
+  The `fileSha256` hash of the media file as a `Buffer`. Used to verify integrity after download.
+  `undefined` for non-media messages.
+</ResponseField>
+
+<ResponseField name="key" type="Buffer | undefined">
+  The `mediaKey` `Buffer` required to decrypt the media file after downloading. `undefined` for
+  non-media messages.
+</ResponseField>
+
+<ResponseField name="url" type="URL | undefined">
+  A `URL` object pointing to the CDN location of the media. `undefined` for non-media messages.
+</ResponseField>
+
+<ResponseField name="path" type="string | undefined">
+  The `directPath` string used alongside `url` to construct the full media CDN URL. `undefined` for
+  non-media messages.
+</ResponseField>
+
+<ResponseField name="quoted" type="Message | undefined">
+  If this message is a reply to another message, `quoted` is a fully hydrated `Message` instance
+  representing the original message, with the same set of fields. `undefined` if the message is not
+  a reply.
+</ResponseField>
+
+## Checking Message Context
+
+Use the helper methods on `Message` to branch your logic quickly:
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.isFromMe()) {
+    // Sent by the bot itself — usually safe to ignore
+    return;
+  }
+
+  if (m.isGroup()) {
+    console.log('Group message in', m.chat, 'from', m.sender);
+  } else {
+    console.log('Private message from', m.sender);
+  }
+
+  // Check the content type
+  if (m.type === 'imageMessage') {
+    console.log('Received an image, MIME type:', m.mimetype);
+  }
+
+  if (m.type === 'conversation' || m.type === 'extendedTextMessage') {
+    console.log('Text:', m.text);
+  }
+});
+```
+
+## Quoted Messages
+
+When a user replies to a previous message, `m.quoted` holds a `Message` instance for the original. It carries the same fields — `id`, `chat`, `sender`, `text`, `type`, `mimetype`, `url`, `key`, `path`, and so on — so you can inspect or download the quoted media.
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.quoted) {
+    console.log('This is a reply to message ID:', m.quoted.id);
+    console.log('Original text:', m.quoted.text);
+
+    if (m.quoted.type === 'imageMessage') {
+      console.log('The quoted message contained an image');
+    }
+  }
+});
+```
+
+## Filtering Messages
+
+Narrow down the messages you act on by combining `isFromMe()`, `isGroup()`, and field checks:
+
+```typescript
+bot.onMessage(async (m) => {
+  // Only respond to group messages
+  if (!m.isGroup()) return;
+
+  // Ignore your own messages
+  if (m.isFromMe()) return;
+
+  // Only respond to a specific group
+  const TARGET_GROUP = '12345678901234567890@g.us';
+  if (m.chat !== TARGET_GROUP) return;
+
+  // Only respond to a specific sender
+  const ADMIN_LID = '12345678901234567890@lid';
+  if (m.sender !== ADMIN_LID) return;
+
+  console.log('Admin message in target group:', m.text);
+});
+```
+
+## Accessing Raw Data
+
+If you need access to fields not exposed by the `Message` abstraction, call `m.toRaw()` to retrieve the underlying `baileys.WAMessage` object:
+
+```typescript
+bot.onMessage(async (m) => {
+  const raw = m.toRaw();
+  // raw is a full baileys.WAMessage
+  console.log('Raw key:', raw.key);
+  console.log('Raw message proto:', raw.message);
+});
+```
+
+<Note>
+  Mutating the object returned by `toRaw()` may affect internal WABotJS behaviour. Treat it as
+  read-only unless you know what you are doing.
+</Note>

@@ -1,0 +1,116 @@
+---
+title: "Stores.JID — JID and Phone Number Mapping Store"
+sidebarTitle: "JID Store"
+description: "Stores.JID persists LID↔PN bidirectional mappings in SQLite, populated automatically from incoming messages."
+---
+
+The `Stores.JID` class maintains a persistent, bidirectional mapping between WhatsApp's two user identifier formats: LID JIDs (anonymous identifiers, e.g. `123456789@lid`) and PN JIDs (phone-number identifiers, e.g. `1234567890@s.whatsapp.net`). Mappings are discovered automatically from inbound message events and stored in a local SQLite database, allowing you to look up either form of a JID given the other at any time during the bot's lifetime.
+
+<Note>
+  In normal usage you never instantiate `Stores.JID` directly. The `Bot` class creates and binds a `JID` store automatically, accessible at `bot.cache.jid`. Construct it manually only if you are composing stores outside of the `Bot` abstraction.
+</Note>
+
+## Import & construction
+
+```typescript
+import { Stores } from 'wabotjs';
+
+const store = new Stores.JID('./data');
+```
+
+The constructor resolves `dir` to an absolute path (relative paths are resolved against `process.cwd()`). It creates a `SQLiteStore` internally but does **not** open the database file yet — call `bind()` to initialize.
+
+## Constructor
+
+```typescript
+new Stores.JID(dir: string)
+```
+
+<ParamField path="dir" type="string" required>
+  Directory in which the SQLite database file will be created. The store writes
+  to `{dir}/jid_store.sqlite`. The directory is created recursively if it does
+  not already exist.
+</ParamField>
+
+## Methods
+
+### `bind(sock)`
+
+```typescript
+bind(sock: Socket): void
+```
+
+Initializes the underlying SQLite database and attaches event listeners to the socket. This method must be called before any mappings can be populated or queried.
+
+Two events are handled:
+
+- **`messages.upsert`** — for every `notify`-type upsert, the store inspects `key.remoteJid` / `key.remoteJidAlt` and `key.participant` / `key.participantAlt`. If both a LID and a PN JID are present, the pair is persisted.
+- **`connection.update`** — when the connection reaches `open`, the bot's own `user.lid`, `user.id`, and `user.phoneNumber` are stored so the bot's own JID is always resolvable.
+
+<ParamField path="sock" type="Socket" required>
+  A WABotJS `Socket` instance whose event emitter will be subscribed to. Passed
+  automatically by `Bot`; supply it yourself only when composing stores manually.
+</ParamField>
+
+```typescript
+import { Stores } from 'wabotjs';
+
+const store = new Stores.JID('./data');
+store.bind(sock); // sock is a connected Socket instance
+```
+
+### `resolve(jid)`
+
+```typescript
+resolve(jid: string): { lid: string; pn: string } | undefined
+```
+
+Looks up the counterpart JID for a given identifier. Accepts either a LID JID or a PN JID. Returns an object containing **both** forms, or `undefined` if the mapping has not yet been observed or the input is not a recognised JID type.
+
+<ParamField path="jid" type="string" required>
+  A LID JID (e.g. `123456789@lid`) or a PN JID
+  (e.g. `1234567890@s.whatsapp.net`) to look up.
+</ParamField>
+
+<ResponseField name="lid" type="string">
+  The LID form of the JID, normalised with `jidNormalizedUser`.
+</ResponseField>
+
+<ResponseField name="pn" type="string">
+  The PN (phone-number) form of the JID, normalised with `jidNormalizedUser`.
+</ResponseField>
+
+```typescript
+// Resolve a PN JID to get the LID form
+const result = store.resolve('1234567890@s.whatsapp.net');
+
+if (result) {
+  console.log(result.lid); // '123456789@lid'
+  console.log(result.pn);  // '1234567890@s.whatsapp.net'
+} else {
+  console.log('No mapping found yet — wait for a message from this contact.');
+}
+
+// Also works the other way: pass a LID to get the PN
+const byLID = store.resolve('123456789@lid');
+console.log(byLID?.pn); // '1234567890@s.whatsapp.net'
+```
+
+<Warning>
+  Resolution returns `undefined` until at least one message has been processed
+  that carries both the LID and PN forms of the target JID. This is a WhatsApp
+  protocol constraint: the SDK can only learn mappings from messages it has
+  actually received.
+</Warning>
+
+## Storage details
+
+| Detail | Value |
+|---|---|
+| Database file | `{dir}/jid_store.sqlite` |
+| Journal mode | WAL |
+| Synchronous mode | NORMAL |
+| TTL | None — entries are kept indefinitely |
+| L1 cache | 10-minute in-memory `TTLCache` in front of SQLite reads |
+
+Each mapping is stored as two symmetric rows: the LID key points to the encoded PN value, and the PN key points to the encoded LID value. Values are UTF-8 encoded strings stored as `BLOB`.

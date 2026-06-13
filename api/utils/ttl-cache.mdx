@@ -1,0 +1,189 @@
+---
+title: "Utils.TTLCache — In-Memory TTL Cache"
+sidebarTitle: "TTLCache"
+description: "TTLCache is an in-memory time-to-live cache with automatic expiry cleanup and lazy expiration checks on every read."
+---
+
+`Utils.TTLCache<V>` is a generic in-memory cache where every entry carries an expiry timestamp. An entry is considered expired once `Date.now()` surpasses `insertTime + ttl`. Expiry is enforced lazily on individual reads (`get`, `has`) and eagerly on bulk reads (`keys`, `values`, `entries`), which filter out any expired entries before returning results. A background `setInterval` cleaner also runs at the same interval as the TTL to sweep expired entries from the underlying `Map`, keeping memory usage bounded even when entries are never explicitly read.
+
+## Import & construction
+
+```typescript
+import { Utils } from 'wabotjs';
+
+const cache = new Utils.TTLCache<string>(60_000); // 60-second TTL
+```
+
+## Constructor
+
+```typescript
+new TTLCache<V>(ttl: number)
+```
+
+<ParamField path="ttl" type="number" required>
+  Time-to-live in milliseconds. Every entry inserted with `set()` expires after
+  this many milliseconds. Must be a positive number — throws `TypeError` if the
+  value is not a number or is less than `1`.
+</ParamField>
+
+## Properties
+
+### `size`
+
+```typescript
+get size(): number
+```
+
+Returns the number of **non-expired** entries currently in the cache. Expired entries that the background cleaner has not yet removed are excluded from this count.
+
+```typescript
+const cache = new Utils.TTLCache<number>(5_000); // 5s TTL
+cache.set('a', 1);
+cache.set('b', 2);
+console.log(cache.size); // 2
+```
+
+## Methods
+
+### `set(key, value)`
+
+```typescript
+set(key: string, value: V): this
+```
+
+Inserts or overwrites a key-value pair and records a fresh expiry timestamp (`Date.now() + ttl`). Also starts the background cleaner if it is not already running. Returns `this` for chaining.
+
+<ParamField path="key" type="string" required>
+  Cache key. Must be a string — throws `TypeError` otherwise.
+</ParamField>
+<ParamField path="value" type="V" required>
+  Value to store.
+</ParamField>
+
+```typescript
+cache.set('session', 'abc123').set('token', 'xyz789');
+```
+
+### `get(key)`
+
+```typescript
+get(key: string): V | undefined
+```
+
+Returns the stored value for `key` regardless of expiry, or `undefined` if the key does not exist. 
+
+<ParamField path="key" type="string" required>
+  Cache key to look up.
+</ParamField>
+
+<Warning>
+  `get()` returns a value even if the entry has expired. Use `has()` first when
+  you need to confirm an entry is still live, or rely on `entries()` / `keys()` /
+  `values()` which all filter expired entries automatically.
+</Warning>
+
+```typescript
+const value = cache.get('session'); // 'abc123' while not expired
+```
+
+### `del(key)`
+
+```typescript
+del(key: string): boolean
+```
+
+Immediately removes the entry with the given key from the cache. Returns `true` if the key existed (regardless of expiry), `false` if it was not found.
+
+<ParamField path="key" type="string" required>
+  Cache key to delete.
+</ParamField>
+
+```typescript
+cache.del('session'); // true
+```
+
+### `has(key)`
+
+```typescript
+has(key: string): boolean
+```
+
+Returns `true` only if the key exists **and** its expiry timestamp has not yet passed. Expired entries return `false` even if the cleaner has not yet removed them from the underlying `Map`.
+
+```typescript
+console.log(cache.has('token')); // true (within TTL)
+
+// After TTL elapses:
+console.log(cache.has('token')); // false
+```
+
+### `clear()`
+
+```typescript
+clear(): void
+```
+
+Removes all entries from the cache and stops the background cleaner interval. The cleaner will restart automatically the next time `set()` is called.
+
+```typescript
+cache.clear();
+console.log(cache.size); // 0
+```
+
+### `keys()`
+
+```typescript
+keys(): string[]
+```
+
+Returns an array of keys for all **non-expired** entries. Expired entries are excluded even if the cleaner has not yet swept them.
+
+```typescript
+console.log(cache.keys()); // ['token'] (if 'session' expired)
+```
+
+### `values()`
+
+```typescript
+values(): V[]
+```
+
+Returns an array of values for all **non-expired** entries, in the same order as `keys()`.
+
+```typescript
+console.log(cache.values()); // ['xyz789']
+```
+
+### `entries()`
+
+```typescript
+entries(): [string, V][]
+```
+
+Returns an array of `[key, value]` tuples for all **non-expired** entries.
+
+```typescript
+console.log(cache.entries()); // [['token', 'xyz789']]
+```
+
+## Background cleaner
+
+The TTLCache starts a `setInterval` cleaner the first time `set()` is called. The interval period equals the TTL. On each tick, every entry whose expiry timestamp has passed is removed from the underlying `Map`. When the `Map` is fully empty, the cleaner stops itself automatically.
+
+<Note>
+  The cleaner interval is **unref'd** via `interval.unref()`. This means the
+  interval will not keep the Node.js event loop alive on its own — your process
+  can exit normally even if the cache still holds entries with a pending cleaner.
+</Note>
+
+```typescript
+// The cleaner stops itself when the cache drains to zero entries.
+// It restarts on the next call to set().
+const shortCache = new Utils.TTLCache<string>(200); // 200ms TTL
+shortCache.set('temp', 'value');
+
+setTimeout(() => {
+  // After 200ms the entry has expired; the cleaner will have removed it.
+  console.log(shortCache.has('temp')); // false
+}, 300);
+```

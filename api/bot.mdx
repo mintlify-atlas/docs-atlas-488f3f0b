@@ -1,0 +1,386 @@
+---
+title: "Bot — WABotJS Core Class Reference"
+sidebarTitle: "Bot"
+description: "Bot is the main class in WABotJS — configure event handlers, manage lifecycle, and access cache, auth, and socket."
+---
+
+`Bot` is the central class of WABotJS. It manages the full lifecycle of a WhatsApp session: authenticating with Baileys, maintaining a persistent SQLite-backed credential store, routing incoming messages to your handlers, and automatically reconnecting when the connection drops. Every WABotJS project starts by instantiating a `Bot`.
+
+<CodeGroup>
+```typescript Named import
+import { Bot } from 'wabotjs';
+
+const bot = new Bot('my-bot', './data/my-bot');
+```
+
+```typescript Default import
+import wabotjs from 'wabotjs';
+
+const bot = new wabotjs.Bot('my-bot', './data/my-bot');
+```
+</CodeGroup>
+
+---
+
+## Constructor
+
+```typescript
+new Bot(id: string, datadir: string)
+```
+
+Creates a new `Bot` instance and initialises its `Auth` instance and all three cache stores. The socket is **not** created until you call `login()`.
+
+<ParamField path="id" type="string" required>
+  A unique string identifier for this bot instance. Used to differentiate between
+  multiple bots sharing the same process. Validated as a non-empty string.
+</ParamField>
+
+<ParamField path="datadir" type="string" required>
+  The directory path where all SQLite files (`auth.sqlite`, `jid.sqlite`,
+  `message.sqlite`) will be stored. Relative paths are resolved to an absolute
+  path via `path.resolve()` at construction time.
+</ParamField>
+
+---
+
+## Properties
+
+### `id`
+
+```typescript
+id: string  // readonly
+```
+
+The identifier string passed to the constructor. Exposed as a getter; the underlying private field cannot be mutated after construction.
+
+---
+
+### `prefix`
+
+```typescript
+prefix: string  // readonly
+```
+
+The current command prefix used to detect commands in incoming messages. Defaults to `'/'`. Update it with [`setPrefix()`](#setprefix). Exposed as a getter; use `setPrefix()` to change it.
+
+---
+
+### `sock`
+
+```typescript
+sock: Socket
+```
+
+The active [`Socket`](/api/socket) instance wrapping the underlying Baileys WebSocket. Accessing this property before calling `login()` throws:
+
+```
+Error: uninitialized sock, calling .login() first
+```
+
+<Warning>
+  Always call `login()` and wait for the `onOpen` callback to fire before using
+  `bot.sock` directly. The socket is recreated on every reconnect cycle, so
+  never cache a reference to it.
+</Warning>
+
+---
+
+### `auth`
+
+```typescript
+auth: Auth
+```
+
+The [`Auth`](/api/auth) instance responsible for persisting WhatsApp session credentials in SQLite. `Bot` calls `auth.load()` automatically at the start of `login()` and `auth.saveCreds()` on every `creds.update` event.
+
+---
+
+### `cache`
+
+```typescript
+cache: {
+  jid: Stores.JID;
+  message: Stores.Message;
+  metadata: TTLCache<baileys.GroupMetadata>;
+}
+```
+
+Three in-process caches that reduce round-trips to WhatsApp:
+
+| Sub-cache | Type | Purpose |
+|---|---|---|
+| `jid` | `Stores.JID` | Maps phone-number JIDs to LID JIDs, backed by `jid.sqlite` |
+| `message` | `Stores.Message` | Caches recent messages for retry look-ups, backed by `message.sqlite` |
+| `metadata` | `TTLCache<GroupMetadata>` | Caches group metadata in-memory with a 10-minute TTL |
+
+<Tip>
+  The `metadata` TTL cache is consulted before every `groupMetadata()` call
+  made by Baileys, so high-volume group bots avoid redundant API requests
+  automatically.
+</Tip>
+
+---
+
+## Event Handlers
+
+All handler-registration methods return `this`, enabling fluent chaining. Every callback must be an `async` function (returning a `Promise<void>`). Errors thrown inside a callback are caught and forwarded to `onError`.
+
+<Note>
+  Register all handlers **before** calling `login()`. Handlers registered after
+  `login()` may miss early events such as `onQR` or `onOTP`.
+</Note>
+
+---
+
+### `onError`
+
+```typescript
+onError(cb: (err: Error) => Promise<void>): this
+```
+
+Registers the global error handler. If you do not register one, WABotJS prints a warning and logs the error to `console.error` by default.
+
+<ParamField path="cb" type="(err: Error) => Promise<void>" required>
+  Called whenever an unhandled error occurs anywhere inside WABotJS — including
+  errors thrown in your other handlers, connection errors, and credential-save
+  failures.
+</ParamField>
+
+---
+
+### `onQR`
+
+```typescript
+onQR(cb: (str: string) => Promise<void>): this
+```
+
+Called when a QR code is generated for login. `str` is the raw QR payload string — pass it to a QR-rendering library to display it.
+
+<ParamField path="cb" type="(str: string) => Promise<void>" required>
+  Receives the raw QR string. Render it with a library such as `qrcode` and
+  display it to the user who needs to scan with their phone.
+</ParamField>
+
+<Note>
+  `onQR` fires only when `login()` is called **without** a phone number, or
+  when a phone number is provided but the credentials are already registered.
+  For OTP/pairing-code login, handle `onOTP` instead.
+</Note>
+
+---
+
+### `onOTP`
+
+```typescript
+onOTP(cb: (code: string) => Promise<void>): this
+```
+
+Called when an OTP pairing code is issued during phone-number-based login.
+
+<ParamField path="cb" type="(code: string) => Promise<void>" required>
+  Receives the 8-character pairing code that the user must enter in WhatsApp
+  on their phone under **Linked Devices → Link a Device → Link with phone
+  number instead**.
+</ParamField>
+
+---
+
+### `onOpen`
+
+```typescript
+onOpen(cb: (user: baileys.Contact) => Promise<void>): this
+```
+
+Called when the connection is successfully established and the bot's user details are confirmed.
+
+<ParamField path="cb" type="(user: baileys.Contact) => Promise<void>" required>
+  `user` is the Baileys `Contact` object for the logged-in account. It exposes
+  `user.id` (phone-number JID), `user.lid` (LID JID), and `user.name`.
+</ParamField>
+
+---
+
+### `onClose`
+
+```typescript
+onClose(cb: (err: boom.Output) => Promise<void>): this
+```
+
+Called when the connection closes **permanently** — i.e. the disconnect reason is one of `loggedOut`, `forbidden`, `405`, or `400`. WABotJS does **not** reconnect after calling `onClose`; `logout()` is invoked automatically.
+
+<ParamField path="cb" type="(err: boom.Output) => Promise<void>" required>
+  `err` is the `@hapi/boom` output object describing the disconnect reason,
+  including `err.statusCode` and `err.payload.message`.
+</ParamField>
+
+<Warning>
+  Do not call `bot.login()` from inside `onClose`. Auth data has already been
+  deleted by the time `onClose` fires.
+</Warning>
+
+---
+
+### `onMessage`
+
+```typescript
+onMessage(cb: (m: Message) => Promise<void>): this
+```
+
+Called for every incoming message of type `notify` (i.e. real-time messages, not history sync).
+
+<ParamField path="cb" type="(m: Message) => Promise<void>" required>
+  `m` is a fully constructed [`Message`](/api/message) instance, including
+  resolved LID/sender, quoted message, and media metadata if present.
+</ParamField>
+
+---
+
+### `onCommand`
+
+```typescript
+onCommand(cb: (m: Message, prefix: string, name: string, args: string[]) => Promise<void>): this
+```
+
+Called for every message whose text starts with the current prefix. Runs **in addition to** `onMessage` — both fire for command messages.
+
+<ParamField path="cb" type="(m: Message, prefix: string, name: string, args: string[]) => Promise<void>" required>
+  Receives four arguments: `m` — the same `Message` passed to `onMessage`; `prefix` — the matched prefix string (e.g. `'/'`); `name` — the command name, lower-cased (e.g. `'ping'`); `args` — the remaining whitespace-split tokens (e.g. `['hello', 'world']`).
+</ParamField>
+
+<Tip>
+  The command `name` is always lowercased. Arguments preserve their original
+  casing, so `/Echo Hello World` yields `name = 'echo'` and
+  `args = ['Hello', 'World']`.
+</Tip>
+
+---
+
+## Methods
+
+### `setPrefix`
+
+```typescript
+setPrefix(prefix: string): void
+```
+
+Changes the command prefix used to detect commands in `onCommand`. Takes effect immediately for all subsequent messages.
+
+<ParamField path="prefix" type="string" required>
+  The new prefix string. Any non-empty string is valid (e.g. `'!'`, `'.'`,
+  `'//'`).
+</ParamField>
+
+---
+
+### `login`
+
+```typescript
+login(pn?: string): Promise<void>
+```
+
+Initiates the WhatsApp connection. This method is **idempotent** — calling it while already logged in or while a login is in progress is a no-op.
+
+<ParamField path="pn" type="string">
+  Optional E.164-style phone number for OTP/pairing-code login (e.g.
+  `'15551234567'` or `'+15551234567'`). If provided and the session credentials
+  are not yet registered, WABotJS requests a pairing code from WhatsApp and
+  delivers it via `onOTP`. If credentials are already registered the phone
+  number is ignored and QR login proceeds normally.
+</ParamField>
+
+`login()` performs the following steps internally:
+
+1. Loads credentials via `auth.load()`
+2. Fetches the latest WhatsApp Web version
+3. Constructs a new `Socket` with the configured browser fingerprint
+4. Binds the JID and message cache stores to the socket
+5. Sets up `creds.update`, `connection.update`, and `messages.upsert` event listeners
+
+---
+
+### `logout`
+
+```typescript
+logout(): Promise<void>
+```
+
+Sends a logout signal to WhatsApp, removes all socket event listeners, deletes the auth SQLite file via `auth.drop()`, and resets the login state. Subsequent calls to `login()` will start a fresh session.
+
+---
+
+### `close`
+
+```typescript
+close(): Promise<void>
+```
+
+Closes the WebSocket connection without deleting session credentials. The bot can be reconnected by calling `login()` again, and it will reuse the existing credentials.
+
+---
+
+## Reconnection Behavior
+
+WABotJS implements automatic reconnection with **exponential back-off**. When the socket disconnects with a non-permanent reason (anything other than `loggedOut`, `forbidden`, `405`, or `400`), the bot waits and calls `login()` again:
+
+- Initial retry delay: **5 seconds**
+- Each subsequent failure doubles the delay
+- Maximum retry delay: **5 minutes**
+- A `restartRequired` disconnect skips the delay and reconnects immediately
+- On a successful reconnect the delay resets back to 5 seconds
+
+**Permanent disconnect codes** — `loggedOut`, `forbidden`, `405`, and `400` — trigger `onClose` and a full `logout()` instead of reconnecting.
+
+---
+
+## Full Example
+
+```typescript
+import path from 'node:path';
+import qrcode from 'qrcode';
+import { Bot } from 'wabotjs';
+
+const id = 'my-bot';
+const datadir = path.join(process.cwd(), 'data', id);
+const bot = new Bot(id, datadir);
+
+bot
+  .onError(async (err) => {
+    console.error(`[${id}] error:`, err);
+  })
+  .onQR(async (str) => {
+    console.log(`[${id}] Scan this QR code:`);
+    console.log(await qrcode.toString(str, { type: 'terminal', small: true }));
+  })
+  .onOTP(async (code) => {
+    console.log(`[${id}] Enter this pairing code on your phone: ${code}`);
+  })
+  .onOpen(async (user) => {
+    console.log(`[${id}] Logged in as`, user.id);
+  })
+  .onClose(async (err) => {
+    console.warn(`[${id}] Permanently disconnected:`, err.statusCode);
+  })
+  .onMessage(async (m) => {
+    console.log(`[${id}] Message from ${m.sender}:`, m.text);
+  })
+  .onCommand(async (m, prefix, name, args) => {
+    if (name === 'ping') {
+      const start = Date.now();
+      const reply = await m.reply({ text: 'Pong!\n> ...ms' });
+      const elapsed = Date.now() - start;
+      if (reply) {
+        await reply.edit({ text: `Pong!\n> ${elapsed}ms` });
+      }
+      return;
+    }
+
+    if (name === 'echo') {
+      await m.reply({ text: args.length > 0 ? args.join(' ') : 'Hello, World!' });
+      return;
+    }
+
+    await m.reply({ text: `Unknown command: ${prefix}${name}` });
+  });
+
+await bot.login();
+```

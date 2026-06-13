@@ -1,0 +1,144 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "WABotJS",
+  "projectDescription": "A TypeScript SDK for building WhatsApp bots on top of Baileys, with built-in authentication, message handling, command routing, and SQLite-backed caching.",
+  "theme": "luma",
+  "primaryColor": "#25D366",
+  "lightColor": "#DCF8C6",
+  "darkColor": "#075E54",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/handling-messages",
+              "guides/command-routing",
+              "guides/sending-messages",
+              "guides/media"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/caching",
+              "concepts/jid-resolution"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/bot",
+              "api/message",
+              "api/auth",
+              "api/socket"
+            ]
+          },
+          {
+            "group": "Stores",
+            "pages": [
+              "api/stores/jid-store",
+              "api/stores/message-store"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utils/lru-cache",
+              "api/utils/ttl-cache",
+              "api/utils/sqlite-store",
+              "api/utils/helpers"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "QR code and OTP (phone number pairing) authentication",
+    "Automatic session persistence via SQLite",
+    "Built-in command routing with configurable prefix",
+    "Message reply, react, read, delete, and edit helpers",
+    "Media message downloading",
+    "JID ↔ phone-number resolution cache",
+    "Message cache with configurable TTL for retry support",
+    "Group metadata cache with TTL",
+    "Automatic reconnection with exponential back-off",
+    "Typed wrapper over the Baileys WebSocket"
+  ],
+  "publicApiSurface": [
+    "Bot",
+    "Bot#login(pn?)",
+    "Bot#logout()",
+    "Bot#close()",
+    "Bot#onError(cb)",
+    "Bot#onQR(cb)",
+    "Bot#onOTP(cb)",
+    "Bot#onOpen(cb)",
+    "Bot#onClose(cb)",
+    "Bot#onMessage(cb)",
+    "Bot#onCommand(cb)",
+    "Bot#setPrefix(prefix)",
+    "Bot#sock",
+    "Bot#auth",
+    "Bot#cache",
+    "Message",
+    "Message#reply(content, options?)",
+    "Message#react(emoji)",
+    "Message#read()",
+    "Message#delete()",
+    "Message#edit(content, options?)",
+    "Message#download()",
+    "Message#isFromMe()",
+    "Message#isGroup()",
+    "Message#toRaw()",
+    "Auth",
+    "Auth#load()",
+    "Auth#drop()",
+    "Auth#saveCreds()",
+    "Auth#dropCreds()",
+    "Auth#get(key)",
+    "Auth#set(key, value)",
+    "Auth#del(key)",
+    "Auth#state",
+    "Socket",
+    "Stores.JID",
+    "Stores.JID#bind(sock)",
+    "Stores.JID#resolve(jid)",
+    "Stores.Message",
+    "Stores.Message#bind(sock)",
+    "Stores.Message#resolve(id)",
+    "Utils.LRUCache",
+    "Utils.TTLCache",
+    "Utils.SQLiteStore",
+    "Utils.resolveLID(...args)",
+    "Utils.resolvePN(...args)",
+    "Utils.resolveLIDAndPN(...args)",
+    "Utils.toError(value)",
+    "Utils.toString(value)",
+    "Utils.delay(ms)",
+    "Utils.assertString(param, name)",
+    "Utils.assertNumber(param, name)",
+    "Utils.assertBuffer(param, name)",
+    "Utils.assertFunction(param, name)",
+    "Constants.USER_AGENT",
+    "Constants.MSG_STORE_TTL"
+  ]
+}

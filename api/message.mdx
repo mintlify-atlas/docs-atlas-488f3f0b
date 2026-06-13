@@ -1,0 +1,422 @@
+---
+title: "Message — WABotJS Message Object Reference"
+sidebarTitle: "Message"
+description: "Message wraps a raw baileys.WAMessage with resolved sender, media metadata, quoted context, and action methods for reply, react, edit, and more."
+---
+
+`Message` is the object passed to your `onMessage` and `onCommand` handlers. It wraps a raw `baileys.WAMessage` and pre-resolves fields that would otherwise require extra look-ups: sender LID, text content, media metadata, mentions, and the full quoted message chain. Action methods such as `reply()`, `react()`, `edit()`, and `delete()` use the bot's active socket automatically so you never need to reference `bot.sock` directly in most handlers.
+
+---
+
+## Constructor
+
+```typescript
+new Message(raw: baileys.WAMessage, bot: Bot)
+```
+
+<Note>
+  `Message` instances are constructed internally by WABotJS when a
+  `messages.upsert` event fires. You do not normally call this constructor
+  directly. The `quoted` property is also a `Message` instance, constructed
+  recursively from the context info embedded in the raw message.
+</Note>
+
+<ParamField path="raw" type="baileys.WAMessage" required>
+  The raw Baileys `WAMessage` object. `raw.key.id` and `raw.key.remoteJid`
+  must be non-null strings or the constructor throws.
+</ParamField>
+
+<ParamField path="bot" type="Bot" required>
+  The owning `Bot` instance. Used for JID resolution, socket access, and cache
+  look-ups during field extraction.
+</ParamField>
+
+---
+
+## Properties
+
+### `id`
+
+```typescript
+id: string
+```
+
+The unique message key ID assigned by WhatsApp (maps to `raw.key.id`). Use this to reference the message in reactions, deletions, and edits.
+
+---
+
+### `chat`
+
+```typescript
+chat: string
+```
+
+The JID of the conversation this message belongs to. For group messages this is the group JID (e.g. `'12345678@g.us'`). For direct messages WABotJS attempts to resolve the JID to a LID, falling back to the phone-number JID if the LID is not yet in cache.
+
+---
+
+### `sender`
+
+```typescript
+sender: string | undefined
+```
+
+The LID JID of the user who sent the message, resolved from the `participant` / `remoteJid` fields and the JID cache. `undefined` for edge cases where the sender cannot be determined (e.g. server messages). For messages sent by the bot itself, this is the bot's own LID.
+
+---
+
+### `text`
+
+```typescript
+text: string | undefined
+```
+
+The message body, trimmed of leading and trailing whitespace. For text messages this is the conversation string. For media messages this is the caption. `undefined` when the message carries no text content (e.g. a bare sticker or a reaction).
+
+---
+
+### `mentions`
+
+```typescript
+mentions: string[]
+```
+
+An array of JIDs mentioned in the message, taken from `contextInfo.mentionedJid`. Phone-number JIDs are resolved to LID JIDs via the bot's JID cache wherever possible. Empty array if no mentions are present.
+
+---
+
+### `timestamp`
+
+```typescript
+timestamp: number
+```
+
+The Unix timestamp (seconds) when the message was sent, derived from `raw.messageTimestamp`. Falls back to `Math.floor(Date.now() / 1000)` if the field is absent.
+
+---
+
+### `type`
+
+```typescript
+type: keyof baileys.WAProto.IMessage | undefined
+```
+
+The Baileys content-type key describing the innermost message content, unwrapped through forwarded/ephemeral layers. Common values include `'conversation'`, `'extendedTextMessage'`, `'imageMessage'`, `'videoMessage'`, `'audioMessage'`, `'documentMessage'`, and `'stickerMessage'`. `undefined` when `raw.message` is absent.
+
+---
+
+### `mimetype`
+
+```typescript
+mimetype: string | undefined
+```
+
+The MIME type of the media payload (e.g. `'image/jpeg'`, `'video/mp4'`, `'audio/ogg; codecs=opus'`). `undefined` for non-media messages.
+
+---
+
+### `hash`
+
+```typescript
+hash: Buffer | undefined
+```
+
+The SHA-256 hash (`fileSha256`) of the encrypted media file as a `Buffer`. Used to verify integrity after download. `undefined` for non-media messages.
+
+---
+
+### `key`
+
+```typescript
+key: Buffer | undefined
+```
+
+The AES media decryption key (`mediaKey`) as a `Buffer`. Required to decrypt the downloaded media stream. `undefined` for non-media messages.
+
+<Warning>
+  `key` here refers to the **media decryption key**, not the message key
+  (`raw.key`). Do not confuse the two.
+</Warning>
+
+---
+
+### `url`
+
+```typescript
+url: URL | undefined
+```
+
+The CDN `URL` object from which the encrypted media blob can be downloaded. `undefined` for non-media messages. Use `download()` rather than fetching this URL directly — WABotJS handles decryption for you.
+
+---
+
+### `path`
+
+```typescript
+path: string | undefined
+```
+
+The WhatsApp media `directPath` string (e.g. `/v/...`). Used internally by Baileys when constructing download requests. `undefined` for non-media messages.
+
+---
+
+### `quoted`
+
+```typescript
+quoted: Message | undefined
+```
+
+The message being replied to, reconstructed as a full `Message` instance from the `contextInfo.quotedMessage` field. `undefined` when the message is not a reply. Accessing `quoted.quoted` gives you the message that the quoted message itself was replying to, and so on.
+
+---
+
+## Methods
+
+### `isFromMe`
+
+```typescript
+isFromMe(): boolean
+```
+
+Returns `true` if the message was sent by the bot's own account (`raw.key.fromMe === true`).
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.isFromMe()) return; // ignore echoes of the bot's own messages
+});
+```
+
+---
+
+### `isGroup`
+
+```typescript
+isGroup(): boolean
+```
+
+Returns `true` if `m.chat` is a group JID (ends with `@g.us`).
+
+```typescript
+bot.onCommand(async (m, prefix, name) => {
+  if (!m.isGroup() && name === 'info') {
+    await m.reply({ text: 'This command only works in groups.' });
+  }
+});
+```
+
+---
+
+### `toRaw`
+
+```typescript
+toRaw(): baileys.WAMessage
+```
+
+Returns the underlying `baileys.WAMessage` object. Use this when you need to pass the raw message to a Baileys API that does not accept a `Message` instance.
+
+```typescript
+import * as baileys from 'wabotjs/baileys';
+
+bot.onMessage(async (m) => {
+  const raw = m.toRaw();
+  console.log(baileys.getContentType(raw.message ?? {}));
+});
+```
+
+---
+
+### `download`
+
+```typescript
+download(): Promise<Buffer>
+```
+
+Downloads the media payload and returns it as a decrypted `Buffer`. Throws if `url`, `key`, or `path` are `undefined` (i.e. the message is not a downloadable media message).
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.type === 'imageMessage') {
+    const buffer = await m.download();
+    console.log(`Downloaded ${buffer.length} bytes`);
+  }
+});
+```
+
+<Warning>
+  Always check `m.type` or `m.url` before calling `download()` to avoid
+  unhandled errors on non-media messages.
+</Warning>
+
+---
+
+### `reply`
+
+```typescript
+reply(
+  content: baileys.AnyMessageContent,
+  options?: Omit<baileys.MiscMessageGenerationOptions, 'quoted'>
+): Promise<Message | undefined>
+```
+
+Sends a message to `m.chat` quoting the current message. Returns the sent message as a new `Message` instance, or `undefined` if Baileys did not return a message object.
+
+<ParamField path="content" type="baileys.AnyMessageContent" required>
+  Any Baileys message content object — `{ text }`, `{ image, caption }`,
+  `{ video }`, `{ audio }`, etc.
+</ParamField>
+
+<ParamField path="options" type="Omit<baileys.MiscMessageGenerationOptions, 'quoted'>">
+  Additional Baileys send options such as `ephemeralExpiration`. The `quoted`
+  option is set automatically to the current message.
+</ParamField>
+
+```typescript
+bot.onCommand(async (m, prefix, name) => {
+  if (name === 'hello') {
+    await m.reply({ text: 'Hello back!' });
+  }
+});
+```
+
+---
+
+### `react`
+
+```typescript
+react(emoji: string): Promise<Message | undefined>
+```
+
+Sends a reaction to this message. Pass an empty string `''` to remove an existing reaction.
+
+<ParamField path="emoji" type="string" required>
+  A single emoji character (e.g. `'👍'`), or `''` to un-react.
+</ParamField>
+
+```typescript
+bot.onMessage(async (m) => {
+  await m.react('👋');
+});
+```
+
+---
+
+### `read`
+
+```typescript
+read(): Promise<void>
+```
+
+Marks this message as read, sending a read receipt to the sender. Calls `bot.sock.readMessages([raw.key])` internally.
+
+```typescript
+bot.onMessage(async (m) => {
+  await m.read();
+});
+```
+
+---
+
+### `delete`
+
+```typescript
+delete(): Promise<Message | undefined>
+```
+
+Deletes this message (for everyone). Returns the resulting revoke-message as a `Message` instance, or `undefined`.
+
+```typescript
+bot.onCommand(async (m, prefix, name) => {
+  if (name === 'delete' && m.quoted) {
+    await m.quoted.delete();
+  }
+});
+```
+
+---
+
+### `edit`
+
+```typescript
+edit(
+  content: baileys.AnyMessageContent,
+  options?: Omit<baileys.MiscMessageGenerationOptions, 'quoted'>
+): Promise<Message | undefined>
+```
+
+Edits the content of this message. **Throws** if `isFromMe()` returns `false` — only the bot's own messages can be edited.
+
+<ParamField path="content" type="baileys.AnyMessageContent" required>
+  The new message content. Typically `{ text: 'new text' }`.
+</ParamField>
+
+<ParamField path="options" type="Omit<baileys.MiscMessageGenerationOptions, 'quoted'>">
+  Additional Baileys send options.
+</ParamField>
+
+```typescript
+bot.onCommand(async (m, prefix, name) => {
+  if (name === 'ping') {
+    const start = Date.now();
+    const reply = await m.reply({ text: 'Pong!\n> ...ms' });
+    const elapsed = Date.now() - start;
+    if (reply) {
+      await reply.edit({ text: `Pong!\n> ${elapsed}ms` });
+    }
+  }
+});
+```
+
+<Warning>
+  Calling `edit()` on a message that was not sent by the bot throws:
+  `Error: the message with id <id> cannot be edited because it was not sent by the bot`
+</Warning>
+
+---
+
+## Full Example
+
+The following handler checks message type, downloads the image if present, and sends back a confirmation reply:
+
+```typescript
+import { Bot } from 'wabotjs';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+
+const bot = new Bot('image-bot', path.join(process.cwd(), 'data', 'image-bot'));
+
+bot
+  .onError(async (err) => console.error(err))
+  .onQR(async (str) => console.log('QR:', str))
+  .onMessage(async (m) => {
+    // Ignore own messages
+    if (m.isFromMe()) return;
+
+    // Mark as read immediately
+    await m.read();
+
+    if (m.type === 'imageMessage') {
+      await m.react('📥');
+
+      try {
+        const buffer = await m.download();
+        const filename = `image-${m.id}.jpg`;
+        await fs.writeFile(filename, buffer);
+
+        await m.reply({
+          text: `✅ Saved your image (${buffer.length} bytes) as *${filename}*`,
+        });
+      } catch (err) {
+        await m.reply({ text: `❌ Failed to download: ${String(err)}` });
+      }
+
+      return;
+    }
+
+    if (m.type === 'conversation' || m.type === 'extendedTextMessage') {
+      // Echo the text back
+      await m.reply({ text: `You said: ${m.text}` });
+    }
+  });
+
+await bot.login();
+```

@@ -1,0 +1,162 @@
+---
+title: "Send Messages and Reactions with WABotJS"
+sidebarTitle: "Sending Messages"
+description: "Learn how to reply, react, edit, delete, and mark messages as read, plus how to send to any chat using baileys.AnyMessageContent."
+---
+
+WABotJS exposes message-action methods directly on the `Message` object, so you can act on any incoming message with a single method call. For more control — such as starting a conversation in a chat where no message has arrived yet — you can also reach the underlying socket directly.
+
+## Replying to a Message
+
+`m.reply(content, options?)` sends a message back to the same chat and **quotes the original message**, so recipients see the reply thread. It returns a `Promise<Message | undefined>` — the resolved value is a new `Message` representing the sent message, which you can then edit or react to.
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.text === 'hello') {
+    const sent = await m.reply({ text: 'Hello back! 👋' });
+    console.log('Sent message ID:', sent?.id);
+  }
+});
+```
+
+The `content` parameter is `baileys.AnyMessageContent` — see the [Content Types](#content-types) section below for examples.
+
+## Sending to Any Chat
+
+To send a message without quoting — or to initiate a message in a chat not triggered by an incoming event — use `bot.sock.sendMessage(jid, content)`. `bot.sock` is the `Socket` instance that wraps the underlying `baileys.WASocket`.
+
+```typescript
+bot.onOpen(async (user) => {
+  const targetJid = '12345678901234567890@lid'; // or a group JID like ...@g.us
+  await bot.sock.sendMessage(targetJid, { text: 'Bot is online!' });
+});
+```
+
+<Note>
+  `bot.sock` throws if accessed before `bot.login()` is called. Always access it inside a callback
+  (`onOpen`, `onMessage`, etc.) or after `await bot.login()` resolves.
+</Note>
+
+## Reacting to a Message
+
+`m.react(emoji)` sends an emoji reaction to the message. Pass the emoji as a string:
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.text?.toLowerCase().includes('thanks')) {
+    await m.react('❤️');
+  }
+});
+```
+
+To remove a reaction, pass an empty string:
+
+```typescript
+await m.react(''); // Removes the bot's existing reaction
+```
+
+`react()` returns `Promise<Message | undefined>` — the reaction protocol message.
+
+## Editing a Message
+
+`m.edit(content, options?)` edits a message that the bot itself sent. It throws an `Error` if `m.isFromMe()` is `false`, so it's safe to call only on messages returned by `reply()` or other send operations.
+
+The classic use-case — shown in the WABotJS test suite — is to send a placeholder, compute a result, then update the message in-place:
+
+```typescript
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'ping') {
+    const start = Date.now();
+    // Send a placeholder
+    const res = await m.reply({ text: 'Pong!\n> ...ms' });
+    const ping = Math.max(0, Date.now() - start);
+    // Edit it with the real value
+    if (res) {
+      await res.edit({ text: `Pong!\n> ${ping}ms` });
+    }
+  }
+});
+```
+
+## Deleting a Message
+
+`m.delete()` revokes the message for everyone in the chat. Returns `Promise<Message | undefined>`.
+
+```typescript
+bot.onMessage(async (m) => {
+  if (m.text === '!deleteme' && m.isFromMe()) {
+    await m.delete();
+  }
+});
+```
+
+## Marking as Read
+
+`m.read()` sends a read receipt for the message, moving it out of the "unread" state in the sender's WhatsApp:
+
+```typescript
+bot.onMessage(async (m) => {
+  // Acknowledge every incoming message
+  await m.read();
+});
+```
+
+## Content Types
+
+All send and reply methods accept `baileys.AnyMessageContent` as the `content` argument. WABotJS re-exports the complete Baileys library, so you can import any Baileys type directly from `wabotjs`.
+
+<Note>
+  WABotJS re-exports the full Baileys library. You can import Baileys types directly:
+  `import type { AnyMessageContent } from 'wabotjs'`.
+</Note>
+
+Below are the most common content shapes:
+
+<CodeGroup>
+
+```typescript Text
+await m.reply({ text: 'Hello, World!' });
+```
+
+```typescript Image
+import { readFileSync } from 'node:fs';
+
+const buffer = readFileSync('./photo.jpg');
+await m.reply({
+  image: buffer,
+  caption: 'Here is your photo!',
+});
+```
+
+```typescript Audio
+import { readFileSync } from 'node:fs';
+
+const buffer = readFileSync('./audio.mp4');
+await m.reply({
+  audio: buffer,
+  mimetype: 'audio/mp4',
+});
+```
+
+```typescript Video
+import { readFileSync } from 'node:fs';
+
+const buffer = readFileSync('./clip.mp4');
+await m.reply({
+  video: buffer,
+  caption: 'Check out this clip!',
+});
+```
+
+```typescript Document
+import { readFileSync } from 'node:fs';
+
+const buffer = readFileSync('./report.pdf');
+await m.reply({
+  document: buffer,
+  mimetype: 'application/pdf',
+  fileName: 'report.pdf',
+});
+```
+
+</CodeGroup>

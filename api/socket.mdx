@@ -1,0 +1,213 @@
+---
+title: "Socket — WABotJS Baileys Socket Wrapper Reference"
+sidebarTitle: "Socket"
+description: "Socket wraps baileys.WASocket, exposing all its methods and events with typed async overrides for end() and logout() and full WASocket passthrough."
+---
+
+`Socket` is a thin typed wrapper around `baileys.makeWASocket`. It copies every property and method from the underlying `baileys.WASocket` instance onto itself at construction time, then provides typed `async` overrides for `end()` and `logout()` — the two methods whose signatures differ from the raw Baileys interface. All other Baileys methods (`sendMessage`, `groupMetadata`, `readMessages`, `requestPairingCode`, etc.) and all event emitter behaviour are inherited verbatim from the socket instance created by `baileys.makeWASocket`.
+
+You do not instantiate `Socket` directly. Access it through `bot.sock` after calling `bot.login()`.
+
+```typescript
+// Access the socket from your bot instance:
+const sock = bot.sock;
+await sock.sendMessage('15551234567@s.whatsapp.net', { text: 'Hello!' });
+```
+
+---
+
+## Constructor
+
+```typescript
+new Socket(config: baileys.UserFacingSocketConfig)
+```
+
+<Note>
+  `Socket` is constructed by `Bot.login()` internally. The `config` object is
+  assembled by `Bot` from your `Auth` state, the fetched WhatsApp Web version,
+  browser fingerprint, message/metadata cache callbacks, and other options.
+  You do not call this constructor directly.
+</Note>
+
+<ParamField path="config" type="baileys.UserFacingSocketConfig" required>
+  The full Baileys socket configuration object. Passed directly to
+  `baileys.makeWASocket()`. Refer to the
+  [Baileys documentation](https://github.com/WhiskeySockets/Baileys) for the
+  complete list of supported fields.
+</ParamField>
+
+---
+
+## Overridden Methods
+
+`Socket` provides typed `async` wrappers for two methods from the underlying `WASocket` where the original signatures are incompatible with WABotJS's type interface.
+
+### `end`
+
+```typescript
+end(reason?: Error): Promise<void>
+```
+
+Gracefully closes the underlying WebSocket connection. Delegates to the underlying `WASocket.end()`. Called by `Bot.close()` and `Bot.login()` when restarting the socket.
+
+<ParamField path="reason" type="Error">
+  An optional `Error` describing why the connection is being terminated. When
+  omitted the socket closes without a specific error code. Pass a `boom.Boom`
+  instance with `statusCode: baileys.DisconnectReason.restartRequired` to
+  trigger an immediate reconnect.
+</ParamField>
+
+```typescript
+// Close the current connection; Bot.login() can re-open it
+await bot.sock.end();
+
+// Close with a reason
+import boom from '@hapi/boom';
+import * as baileys from 'wabotjs/baileys';
+
+await bot.sock.end(
+  new boom.Boom('restarting', {
+    statusCode: baileys.DisconnectReason.restartRequired,
+  })
+);
+```
+
+---
+
+### `logout`
+
+```typescript
+logout(reason?: Error): Promise<void>
+```
+
+Sends a logout signal to WhatsApp and then closes the connection. The `reason.message` string (if provided) is forwarded to the underlying `WASocket.logout()`. Called by `Bot.logout()` automatically.
+
+<ParamField path="reason" type="Error">
+  An optional `Error` whose `.message` is forwarded to the Baileys logout
+  call. In practice this field is rarely needed in user code.
+</ParamField>
+
+<Warning>
+  After calling `bot.sock.logout()` directly, the bot's auth data is **not**
+  automatically deleted. Use `bot.logout()` instead to cleanly remove
+  credentials and reset the bot's internal state.
+</Warning>
+
+---
+
+## Inherited from Baileys `WASocket`
+
+`Socket` exposes the complete `baileys.WASocket` surface minus the two overridden methods above. The most commonly used members are listed below; consult the [Baileys documentation](https://github.com/WhiskeySockets/Baileys) for the full reference.
+
+<Accordion title="Messaging">
+  ```typescript
+  // Send any type of message to a JID
+  sock.sendMessage(
+    jid: string,
+    content: baileys.AnyMessageContent,
+    options?: baileys.MiscMessageGenerationOptions
+  ): Promise<baileys.WAMessage | undefined>
+
+  // Mark one or more messages as read
+  sock.readMessages(keys: baileys.WAMessageKey[]): Promise<void>
+  ```
+</Accordion>
+
+<Accordion title="Groups">
+  ```typescript
+  // Fetch group metadata (participants, name, description, etc.)
+  sock.groupMetadata(jid: string): Promise<baileys.GroupMetadata>
+
+  // Create, update, or leave groups — examples of other group methods:
+  sock.groupCreate(subject: string, participants: string[]): Promise<baileys.GroupMetadata>
+  sock.groupLeave(jid: string): Promise<void>
+  sock.groupUpdateSubject(jid: string, subject: string): Promise<void>
+  sock.groupUpdateDescription(jid: string, description: string): Promise<void>
+  ```
+</Accordion>
+
+<Accordion title="Authentication & pairing">
+  ```typescript
+  // Request an OTP pairing code for the given phone number
+  // (digits only, no spaces or hyphens)
+  sock.requestPairingCode(phoneNumber: string): Promise<string>
+  ```
+</Accordion>
+
+<Accordion title="Event emitter (sock.ev)">
+  The `ev` property is the Baileys event emitter. WABotJS subscribes to several
+  events internally; you can subscribe to additional ones directly:
+
+  ```typescript
+  // Listen for connection state changes
+  sock.ev.on('connection.update', (update) => {
+    console.log('connection:', update.connection);
+  });
+
+  // Listen for raw message upserts
+  sock.ev.on('messages.upsert', ({ messages, type }) => {
+    if (type === 'notify') {
+      for (const msg of messages) {
+        console.log('raw message:', msg.key.id);
+      }
+    }
+  });
+
+  // Listen for credential updates
+  sock.ev.on('creds.update', () => {
+    // Bot calls auth.saveCreds() here automatically
+  });
+  ```
+
+  Refer to the [Baileys event reference](https://github.com/WhiskeySockets/Baileys#important-events)
+  for the full list of events and their payloads.
+</Accordion>
+
+<Accordion title="User & auth state">
+  ```typescript
+  // The Contact object for the connected account (available after 'open')
+  sock.user: baileys.Contact | undefined
+
+  // The current authentication state object
+  sock.authState: baileys.AuthenticationState
+  ```
+</Accordion>
+
+---
+
+## Example
+
+The most common reason to access `bot.sock` directly is to send a message to a JID that is not in the context of an incoming message:
+
+```typescript
+import { Bot } from 'wabotjs';
+import path from 'node:path';
+
+const bot = new Bot('notify-bot', path.join(process.cwd(), 'data', 'notify-bot'));
+
+bot
+  .onError(async (err) => console.error(err))
+  .onQR(async (str) => console.log('QR:', str))
+  .onOpen(async (user) => {
+    console.log('Logged in as', user.id);
+
+    // Send a message directly to a specific JID
+    await bot.sock.sendMessage('15551234567@s.whatsapp.net', {
+      text: 'Bot is online!',
+    });
+
+    // Fetch group metadata
+    const meta = await bot.sock.groupMetadata('1234567890@g.us');
+    console.log('Group name:', meta.subject);
+  });
+
+await bot.login();
+```
+
+---
+
+<Note>
+  Calling `bot.sock.sendMessage()` directly sends the message **without** quoting
+  any prior message. To send a quoted reply, use `m.reply()` from inside an
+  `onMessage` or `onCommand` handler — it sets the `quoted` option automatically.
+</Note>

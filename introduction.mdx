@@ -1,0 +1,71 @@
+---
+title: "WABotJS: Build WhatsApp Bots with TypeScript"
+sidebarTitle: "Introduction"
+description: "WABotJS is a TypeScript SDK that wraps Baileys to let you build WhatsApp bots with session persistence, command routing, and message helpers."
+---
+
+WABotJS is a TypeScript library for building WhatsApp bots on top of [Baileys](https://github.com/WhiskeySockets/Baileys), the leading open-source WhatsApp Web client. Where Baileys gives you a powerful but low-level WebSocket interface, WABotJS layers a clean, ergonomic API on top — handling authentication, SQLite-backed session persistence, command routing, and common message actions so you can focus on your bot's logic rather than the plumbing.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="QR & OTP Authentication" icon="qrcode">
+    Connect your bot by scanning a QR code in the terminal, or pair silently using a phone number OTP — no manual browser session required.
+  </Card>
+  <Card title="Automatic Session Persistence" icon="database">
+    Sessions are stored in SQLite via Node.js's built-in `node:sqlite` module (available since v24). No native bindings or third-party drivers needed.
+  </Card>
+  <Card title="Built-in Command Routing" icon="terminal">
+    Incoming messages that start with your configured prefix are automatically parsed into a command name and argument list, delivered to your `onCommand` handler.
+  </Card>
+  <Card title="Message Action Helpers" icon="message">
+    Reply to, react on, mark as read, delete, and edit messages through simple async methods on the `Message` object — no raw Baileys calls required.
+  </Card>
+  <Card title="Media Downloading" icon="arrow-down-to-line">
+    Download image, video, audio, document, and sticker messages as a `Buffer` with a single `message.download()` call.
+  </Card>
+  <Card title="JID ↔ Phone-Number Cache" icon="address-book">
+    A SQLite-backed store automatically maps between WhatsApp LID JIDs and E.164 phone numbers so you can look up either direction without extra API calls.
+  </Card>
+  <Card title="Message Cache with TTL" icon="clock">
+    Received messages are stored with a configurable time-to-live so Baileys can retrieve them during retry and decryption flows automatically.
+  </Card>
+  <Card title="Group Metadata Cache" icon="users">
+    Group metadata is cached in memory with a 10-minute TTL, reducing redundant fetches during high-traffic periods.
+  </Card>
+  <Card title="Automatic Reconnection" icon="rotate">
+    On unexpected disconnects the bot reconnects with exponential back-off (starting at 5 s, capped at 5 min), giving transient network issues time to recover.
+  </Card>
+  <Card title="Typed Baileys Re-export" icon="code">
+    The full Baileys library is re-exported as `baileys` from the WABotJS package entry point, so you can import Baileys types without a separate dependency.
+  </Card>
+</CardGroup>
+
+## What is Baileys?
+
+[Baileys](https://github.com/WhiskeySockets/Baileys) is a reverse-engineered Node.js client for WhatsApp Web that communicates directly over the WhatsApp WebSocket protocol. It gives you full programmatic access to messaging, groups, media, and presence — but its API is intentionally close to the wire. WABotJS wraps Baileys with a higher-level, object-oriented API that handles the repetitive setup (auth state, event wiring, caching) and surfaces only what most bot authors need day to day.
+
+## Requirements
+
+| Requirement | Details |
+|---|---|
+| **Node.js** | v24 or later — required for the built-in `node:sqlite` module |
+| **Project type** | ESM (`"type": "module"` in `package.json`) |
+| **TypeScript** | v5+ recommended — types are shipped with the package |
+
+## Quick Links
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a working bot running in minutes with a step-by-step walkthrough.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed setup instructions for all package managers and TypeScript configuration.
+  </Card>
+  <Card title="Authentication Guide" icon="key" href="/guides/authentication">
+    Learn how to use QR-code and phone-number OTP pairing modes.
+  </Card>
+  <Card title="Bot API Reference" icon="book" href="/api/bot">
+    Full reference for the `Bot` class, its handlers, and all available methods.
+  </Card>
+</CardGroup>

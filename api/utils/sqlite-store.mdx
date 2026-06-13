@@ -1,0 +1,264 @@
+---
+title: "Utils.SQLiteStore — Persistent Key-Value Store"
+sidebarTitle: "SQLiteStore"
+description: "SQLiteStore is a persistent key-value store backed by Node.js native SQLite with an optional TTL and in-memory read cache."
+---
+
+`Utils.SQLiteStore` is a string-keyed, `Uint8Array`-valued persistent store built on top of Node.js's built-in `node:sqlite` module (available since Node.js v22.5). It operates as a simple key-value table and, when a TTL is provided, adds an `expire` column and a periodic background cleaner that purges stale rows. An in-memory `TTLCache` with a 10-minute TTL sits in front of all SQLite reads, reducing latency for frequently accessed keys without sacrificing durability.
+
+<Warning>
+  The `name` parameter must match the regular expression `/^[a-z0-9_]+$/`. The
+  constructor throws a `TypeError` immediately if the name contains any other
+  characters. This constraint exists because `name` is interpolated directly
+  into SQL DDL statements.
+</Warning>
+
+## Import & construction
+
+```typescript
+import { Utils } from 'wabotjs';
+
+// Without TTL — entries are kept indefinitely
+const store = new Utils.SQLiteStore('./data', 'my_store');
+
+// With TTL — entries expire after 60 seconds
+const ttlStore = new Utils.SQLiteStore('./data', 'session_store', 60_000);
+```
+
+## Constructor
+
+```typescript
+new SQLiteStore(dir: string, name: string, ttl?: number)
+```
+
+<ParamField path="dir" type="string" required>
+  Directory in which the SQLite database file will be created. The file is
+  placed at `{dir}/{name}.sqlite`. The directory is created recursively if it
+  does not already exist. Relative paths are resolved against `process.cwd()`.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Name of the store, used as both the SQLite filename stem and the table name.
+  Must match `/^[a-z0-9_]+$/` — throws `TypeError` otherwise.
+</ParamField>
+
+<ParamField path="ttl" type="number">
+  Optional time-to-live in milliseconds. When provided, each row is stored with
+  an `expire` timestamp and is excluded from reads once that timestamp passes.
+  A background cleaner runs at `min(ttl, 30 minutes)` intervals to delete
+  expired rows. Must be a positive number if supplied.
+</ParamField>
+
+## Properties
+
+### `dir`
+
+```typescript
+get dir(): string
+```
+
+The absolute path to the directory where the SQLite file is stored.
+
+### `name`
+
+```typescript
+get name(): string
+```
+
+The name of the store as provided to the constructor.
+
+### `db`
+
+```typescript
+get db(): sqlite.DatabaseSync
+```
+
+The underlying `node:sqlite` `DatabaseSync` instance. Useful for executing custom queries directly.
+
+<Warning>
+  Accessing `db` before calling `initialize()` throws an `Error`:
+  `"uninitialized db, calling .initialize() first"`. Always call
+  `initialize()` before using any store methods.
+</Warning>
+
+## Methods
+
+### `initialize()`
+
+```typescript
+initialize(): void
+```
+
+Opens (or creates) the SQLite database file, runs the `CREATE TABLE IF NOT EXISTS` DDL, creates a key index, and starts the background TTL cleaner if a TTL was configured. Safe to call multiple times — subsequent calls are no-ops if the database is already open.
+
+```typescript
+const store = new Utils.SQLiteStore('./data', 'my_store');
+store.initialize(); // must be called before any read/write
+
+store.set('hello', new TextEncoder().encode('world'));
+```
+
+### `drop()`
+
+```typescript
+drop(): void
+```
+
+Closes the database connection, stops the TTL cleaner, clears the in-memory cache, and permanently deletes the `.sqlite`, `.sqlite-wal`, and `.sqlite-shm` files from disk. Idempotent — calling `drop()` on an uninitialized store is a no-op.
+
+<Warning>
+  `drop()` is destructive and irreversible. All stored data is permanently lost.
+</Warning>
+
+```typescript
+store.drop(); // database file and WAL files are deleted
+```
+
+### `get(key)`
+
+```typescript
+get(key: string): Uint8Array | undefined
+```
+
+Retrieves the raw `Uint8Array` blob for the given key, or `undefined` if the key does not exist or has expired. Results are cached in the L1 `TTLCache` for 10 minutes; subsequent reads for the same key are served from memory without hitting SQLite.
+
+<ParamField path="key" type="string" required>
+  The key to look up.
+</ParamField>
+
+```typescript
+const raw = store.get('hello');
+if (raw) {
+  console.log(new TextDecoder().decode(raw)); // 'world'
+}
+```
+
+### `set(key, value)`
+
+```typescript
+set(key: string, value: Uint8Array): void
+```
+
+Inserts or updates a key-value pair using an `INSERT ... ON CONFLICT DO UPDATE` upsert. Also updates the L1 cache. When a TTL is configured, the `expire` column is set to `Date.now() + ttl`.
+
+<ParamField path="key" type="string" required>
+  The key to insert or update.
+</ParamField>
+
+<ParamField path="value" type="Uint8Array" required>
+  The raw binary value to store. Throws `TypeError` if not a `Uint8Array`.
+</ParamField>
+
+```typescript
+const encoded = new TextEncoder().encode(JSON.stringify({ count: 42 }));
+store.set('counter', encoded);
+```
+
+### `del(key)`
+
+```typescript
+del(key: string): void
+```
+
+Removes the entry with the given key from both SQLite and the L1 cache.
+
+```typescript
+store.del('counter');
+```
+
+### `has(key)`
+
+```typescript
+has(key: string): boolean
+```
+
+Returns `true` if the key exists and is not expired. Checks the L1 cache first; falls back to a `get()` call against SQLite.
+
+```typescript
+console.log(store.has('hello')); // true
+console.log(store.has('unknown')); // false
+```
+
+### `keys()`
+
+```typescript
+keys(): string[]
+```
+
+Returns an array of all non-expired keys in the store by issuing a `SELECT key` query against SQLite. Does not use the L1 cache.
+
+```typescript
+console.log(store.keys()); // ['hello']
+```
+
+### `values()`
+
+```typescript
+values(): Uint8Array[]
+```
+
+Returns an array of `Uint8Array` blobs for all non-expired rows. Does not use the L1 cache.
+
+```typescript
+const blobs = store.values();
+```
+
+### `entries()`
+
+```typescript
+entries(): { key: string; value: Uint8Array }[]
+```
+
+Returns an array of `{ key, value }` objects for all non-expired rows, fetched in a single `SELECT key, value` query.
+
+```typescript
+for (const { key, value } of store.entries()) {
+  console.log(key, new TextDecoder().decode(value));
+}
+```
+
+## Storage format
+
+All values are stored as raw `BLOB` columns. `SQLiteStore` performs no serialization — callers are responsible for encoding their data into `Uint8Array` before calling `set()` and decoding it after `get()`.
+
+<CodeGroup>
+```typescript JSON encoding
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+// Write
+const data = { user: 'alice', score: 99 };
+store.set('player:alice', encoder.encode(JSON.stringify(data)));
+
+// Read
+const raw = store.get('player:alice');
+const parsed = raw ? JSON.parse(decoder.decode(raw)) : undefined;
+console.log(parsed); // { user: 'alice', score: 99 }
+```
+
+```typescript Binary encoding
+// Store a raw buffer (e.g. encrypted payload)
+const payload = crypto.getRandomValues(new Uint8Array(32));
+store.set('secret', payload);
+
+const retrieved = store.get('secret'); // same Uint8Array bytes
+```
+</CodeGroup>
+
+## Performance
+
+`SQLiteStore` is tuned for low-latency, crash-safe local storage:
+
+| Setting | Value | Effect |
+|---|---|---|
+| Journal mode | WAL | Allows concurrent reads during writes |
+| Synchronous mode | NORMAL | Durable on OS crash; fast for most workloads |
+| L1 cache TTL | 10 minutes | Frequently read keys served entirely from memory |
+| Cleaner interval | `min(ttl, 30 min)` | Limits cleaner frequency for very long TTLs |
+
+<Tip>
+  The L1 `TTLCache` is a pure in-memory cache that does not persist across
+  process restarts. On startup, the first `get()` or `has()` for a key will
+  always hit SQLite; subsequent accesses within the 10-minute window are served
+  from memory.
+</Tip>

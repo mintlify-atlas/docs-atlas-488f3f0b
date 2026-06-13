@@ -1,0 +1,244 @@
+---
+title: "Auth — WABotJS Credential Management Reference"
+sidebarTitle: "Auth"
+description: "Auth manages SQLite-backed WhatsApp session credentials and Baileys signal keys, with get/set/del helpers for the auth store."
+---
+
+`Auth` manages the persistence layer for WhatsApp session data. It stores Baileys authentication credentials and Signal protocol keys in a SQLite file (`auth.sqlite`) using WAL journal mode and NORMAL sync for durability without excessive flushing. In normal usage you never instantiate `Auth` directly — it is accessible as `bot.auth` and the `Bot` class calls its methods automatically at the right points in the lifecycle.
+
+---
+
+## Constructor
+
+```typescript
+new Auth(dir: string)
+```
+
+<Note>
+  `Auth` is created automatically by `Bot` during construction. You do not
+  normally call this constructor yourself. Access the instance via `bot.auth`.
+</Note>
+
+<ParamField path="dir" type="string" required>
+  The directory in which `auth.sqlite` will be created. Relative paths are
+  resolved to an absolute path via `path.resolve()` at construction time.
+  The directory is created automatically (including any missing parents) when
+  `load()` is called.
+</ParamField>
+
+---
+
+## Properties
+
+### `dir`
+
+```typescript
+dir: string  // readonly
+```
+
+The resolved absolute path to the data directory where `auth.sqlite` is stored. Exposed as a getter.
+
+```typescript
+console.log(bot.auth.dir);
+// e.g. '/home/user/mybot/data/my-bot'
+```
+
+---
+
+### `state`
+
+```typescript
+state: baileys.AuthenticationState
+```
+
+The `{ creds, keys }` object required by `baileys.makeWASocket`. Throws if `load()` has not been called yet:
+
+```
+Error: uninitialized creds or keys, calling .load() first
+```
+
+<Warning>
+  `Bot` passes `auth.state` to the Baileys socket constructor inside `login()`,
+  after calling `load()`. Do not access `state` before `login()` unless you
+  have called `load()` yourself.
+</Warning>
+
+The `state.keys` object implements `baileys.SignalKeyStore` and performs all Signal key reads and writes through the SQLite store, batching writes inside a single `BEGIN TRANSACTION / COMMIT` block for atomicity.
+
+---
+
+## Methods
+
+### `load`
+
+```typescript
+load(): void
+```
+
+Initialises the underlying SQLite database (creating the file and directory if necessary), then loads or creates the Baileys authentication credentials.
+
+- If a `'creds'` row exists in the store it is deserialised and used.
+- If no row exists, `baileys.initAuthCreds()` is called to generate a fresh identity.
+- The Signal key store (`state.keys`) is also wired up to the SQLite backend during this call.
+
+This method is idempotent — repeated calls are no-ops once the store is loaded. `Bot.login()` calls `load()` automatically before constructing the socket.
+
+---
+
+### `saveCreds`
+
+```typescript
+saveCreds(): void
+```
+
+Persists the current in-memory `creds` object to the SQLite store under the `'creds'` key. Throws if `load()` has not been called.
+
+`Bot` registers a listener on the Baileys `creds.update` event that calls `saveCreds()` automatically, so you should rarely need to call this directly.
+
+```typescript
+// Manual save (rarely needed):
+bot.auth.saveCreds();
+```
+
+---
+
+### `drop`
+
+```typescript
+drop(): void
+```
+
+Closes the database connection and deletes the `auth.sqlite` file (and associated WAL/SHM files). Clears the in-memory `creds` and `keys` references and resets the loaded state so `load()` can be called again to start a fresh session.
+
+`Bot.logout()` calls `drop()` automatically. After `drop()`, accessing `auth.state` throws until `load()` is called again.
+
+---
+
+### `dropCreds`
+
+```typescript
+dropCreds(): void
+```
+
+Deletes **only** the `'creds'` row from the SQLite store without dropping the database file or the Signal key material. Resets the in-memory `creds` reference and the loaded flag.
+
+Use `dropCreds()` when you want to force a re-authentication (new QR or OTP) while preserving other stored keys.
+
+<Note>
+  After calling `dropCreds()`, calling `state` throws until `load()` is called
+  again, which will generate fresh credentials via `baileys.initAuthCreds()`.
+</Note>
+
+---
+
+### `get`
+
+```typescript
+get<T>(key: string): T | undefined
+```
+
+Retrieves a value from the auth store by key, deserialising it from JSON (with Baileys `BufferJSON` revival for `Buffer` fields). Returns `undefined` if the key does not exist.
+
+<ParamField path="key" type="string" required>
+  The store key to retrieve. Keys are arbitrary strings; WABotJS uses `'creds'`
+  and colon-delimited keys like `'app-state-sync-key:id'` internally.
+</ParamField>
+
+```typescript
+const creds = bot.auth.get<baileys.AuthenticationCreds>('creds');
+```
+
+---
+
+### `set`
+
+```typescript
+set(key: string, value: object | string): void
+```
+
+Stores a value in the auth store under the given key, serialising it to JSON with Baileys `BufferJSON` replacement (so `Buffer` fields round-trip correctly).
+
+<ParamField path="key" type="string" required>
+  The store key under which to persist the value.
+</ParamField>
+
+<ParamField path="value" type="object | string" required>
+  Any JSON-serialisable value. `Buffer` fields are serialised using the Baileys
+  `BufferJSON.replacer` so they deserialise correctly via `get()`.
+</ParamField>
+
+```typescript
+bot.auth.set('my-custom-key', { foo: 'bar', count: 42 });
+```
+
+---
+
+### `del`
+
+```typescript
+del(key: string): void
+```
+
+Removes the entry for the given key from the auth store. No-op if the key does not exist.
+
+<ParamField path="key" type="string" required>
+  The store key to delete.
+</ParamField>
+
+```typescript
+bot.auth.del('my-custom-key');
+```
+
+---
+
+## Storage Details
+
+<Accordion title="SQLite store internals">
+  The auth store is backed by `{dir}/auth.sqlite` — a Node.js built-in
+  `node:sqlite` database (available in Node.js v24+) configured with:
+
+  | PRAGMA | Value | Reason |
+  |---|---|---|
+  | `journal_mode` | `WAL` | Allows concurrent reads during writes |
+  | `synchronous` | `NORMAL` | Durable without an `fsync` on every write |
+
+  The `values` table has two columns — `key TEXT PRIMARY KEY` and
+  `value BLOB NOT NULL` — and a secondary index on `key` for fast look-ups.
+
+  Signal key writes (from `state.keys.set`) are always wrapped in an explicit
+  `BEGIN TRANSACTION / COMMIT` block, with automatic `ROLLBACK` on error, to
+  guarantee that multi-key updates are atomic.
+</Accordion>
+
+---
+
+## Example
+
+The following snippet shows how `bot.auth` integrates into the normal bot lifecycle. You do not need to call any `Auth` methods yourself in typical use:
+
+```typescript
+import path from 'node:path';
+import { Bot } from 'wabotjs';
+
+const bot = new Bot('my-bot', path.join(process.cwd(), 'data', 'my-bot'));
+
+bot
+  .onOpen(async (user) => {
+    // At this point auth.state is fully loaded and credentials are saved
+    console.log('Auth dir:', bot.auth.dir);
+    // e.g. /home/user/myproject/data/my-bot
+
+    // Read back a stored value
+    const stored = bot.auth.get('my-session-note');
+    if (!stored) {
+      bot.auth.set('my-session-note', { startedAt: Date.now() });
+    }
+  })
+  .onClose(async (err) => {
+    // Bot calls bot.auth.drop() automatically after this handler returns
+    console.warn('Disconnected permanently:', err.statusCode);
+  });
+
+// bot.auth.load() is called automatically inside login()
+await bot.login();
+```

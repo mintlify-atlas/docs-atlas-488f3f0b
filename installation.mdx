@@ -1,0 +1,105 @@
+---
+title: "Installing WABotJS in Your Node.js Project"
+sidebarTitle: "Installation"
+description: "Install WABotJS with npm, pnpm, yarn, or bun. Requires Node.js v24+ and an ESM project. TypeScript types are bundled — no extra @types package needed."
+---
+
+WABotJS is published to npm as `wabotjs` and works with any package manager that supports ESM. Because it relies on Node.js's built-in `node:sqlite` module for session persistence, you must be on **Node.js v24 or later** — no native compilation or separate database driver is required.
+
+## Requirements
+
+Before installing, confirm your environment meets these prerequisites:
+
+| Requirement | Version / Setting | Notes |
+|---|---|---|
+| **Node.js** | v24 or later | Required for `node:sqlite` |
+| **Project type** | `"type": "module"` in `package.json` | WABotJS is ESM-only |
+| **TypeScript** | v5+ (optional, recommended) | Types are shipped with the package |
+
+## Install the Package
+
+<CodeGroup>
+  ```bash npm
+  npm install wabotjs
+  ```
+
+  ```bash pnpm
+  pnpm add wabotjs
+  ```
+
+  ```bash yarn
+  yarn add wabotjs
+  ```
+
+  ```bash bun
+  bun add wabotjs
+  ```
+</CodeGroup>
+
+## Project Setup
+
+### package.json
+
+Your project must be an ESM module. At minimum, set `"type": "module"` in your `package.json`:
+
+```json package.json
+{
+  "name": "my-bot",
+  "version": "1.0.0",
+  "type": "module"
+}
+```
+
+### tsconfig.json
+
+If you are using TypeScript, configure it for ESM output with Node.js module resolution. The following is a recommended starting point:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "outDir": "dist"
+  }
+}
+```
+
+<Tip>
+  The `NodeNext` module and moduleResolution settings are required for TypeScript to correctly handle `.js` extension imports in ESM — which is how WABotJS's built output is structured.
+</Tip>
+
+## Verify Installation
+
+After installing, confirm everything is wired up correctly by importing `Bot` and logging it:
+
+```typescript verify.ts
+import { Bot } from 'wabotjs';
+
+console.log(Bot); // [class Bot]
+```
+
+Run with `npx tsx verify.ts` (or `node verify.js` after compiling). If you see the class logged without errors, WABotJS is installed and your ESM setup is correct.
+
+## Native SQLite Note
+
+<Note>
+  WABotJS uses Node.js's built-in **`node:sqlite`** module — introduced as a stable API in Node.js v24 — to persist authentication credentials, JID mappings, and message caches to disk. This means there are no native compiled bindings to install, no `better-sqlite3` build step, and no external database server required. Your session data lives in plain `.db` files inside the `datadir` directory you configure.
+</Note>
+
+## Peer Exports
+
+WABotJS re-exports the full Baileys library under the `baileys` named export from its main entry point. This means you can import Baileys types and utilities directly from `wabotjs` without adding `baileys` as a separate dependency in your `package.json`:
+
+```typescript
+import { baileys } from 'wabotjs';
+
+// Use Baileys types and helpers directly:
+const isGroup = baileys.isJidGroup('12345678901234567890@g.us');
+console.log(isGroup); // true
+```
+
+<Info>
+  WABotJS currently ships with `baileys@7.0.0-rc13`. If you need a specific Baileys version that differs from the one bundled, install it explicitly in your project — your local version will take precedence.
+</Info>

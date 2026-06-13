@@ -1,0 +1,112 @@
+---
+title: "Stores.Message — Message Cache Store Reference"
+sidebarTitle: "Message Store"
+description: "Stores.Message caches WAMessage payloads in SQLite with a 5-day TTL for Baileys retry support and message update merging."
+---
+
+The `Stores.Message` class is a persistent cache of `WAProto.IMessage` payloads, stored in a local SQLite database with a five-day time-to-live. Its primary purpose is to satisfy the `getMessage` callback that Baileys requires in order to support message retry: when WhatsApp asks the client to re-send a message, Baileys calls `getMessage` with a message ID, and this store provides the original payload. As a secondary benefit, the store merges incoming `messages.update` patches so the cached payload stays up to date.
+
+<Note>
+  In normal usage you never instantiate `Stores.Message` directly. The `Bot` class creates and binds a `Message` store automatically, accessible at `bot.cache.message`. Construct it manually only if you are composing stores outside of the `Bot` abstraction.
+</Note>
+
+## Import & construction
+
+```typescript
+import { Stores } from 'wabotjs';
+
+const store = new Stores.Message('./data');
+```
+
+The constructor resolves `dir` to an absolute path (relative paths are resolved against `process.cwd()`). The underlying database file is not opened until `bind()` is called.
+
+## Constructor
+
+```typescript
+new Stores.Message(dir: string)
+```
+
+<ParamField path="dir" type="string" required>
+  Directory in which the SQLite database file will be created. The store writes
+  to `{dir}/message_store.sqlite`. The directory is created recursively if it
+  does not already exist.
+</ParamField>
+
+## Methods
+
+### `bind(sock)`
+
+```typescript
+bind(sock: Socket): void
+```
+
+Initializes the underlying SQLite database and attaches event listeners to the socket. This method must be called before the store can cache or return messages.
+
+Two events are handled:
+
+- **`messages.upsert`** — for every upserted message that has both `m.message` and `m.key.id`, the payload is serialized and stored (if not already present).
+- **`messages.update`** — for every update, the store retrieves the existing cached payload and shallow-merges the update into it, then re-stores the result. This keeps the cached payload current with edits, reactions, and delivery receipts.
+
+<ParamField path="sock" type="Socket" required>
+  A WABotJS `Socket` instance whose event emitter will be subscribed to. Passed
+  automatically by `Bot`; supply it yourself only when composing stores manually.
+</ParamField>
+
+```typescript
+import { Stores } from 'wabotjs';
+
+const store = new Stores.Message('./data');
+store.bind(sock); // sock is a connected Socket instance
+```
+
+### `resolve(id)`
+
+```typescript
+resolve(id: string): baileys.WAProto.IMessage | undefined
+```
+
+Retrieves a cached message payload by its message ID. Returns the deserialized `IMessage` object, or `undefined` if the ID is unknown or the entry has expired (older than five days).
+
+<ParamField path="id" type="string" required>
+  The message ID (`m.key.id`) of the message to retrieve.
+</ParamField>
+
+<ResponseField name="(return value)" type="baileys.WAProto.IMessage | undefined">
+  The cached message payload, or `undefined` if not found or expired.
+</ResponseField>
+
+```typescript
+const message = store.resolve('ABCDEF1234567890');
+
+if (message) {
+  console.log(message.conversation); // e.g. 'Hello!'
+} else {
+  console.log('Message not found or has expired.');
+}
+```
+
+## TTL and expiry
+
+Messages are stored with a TTL of **5 days** (`Constants.MSG_STORE_TTL = 432_000_000` ms). A periodic background cleaner deletes rows from SQLite whose `expire` timestamp has passed. The cleaner interval is unref'd so it does not prevent the Node.js process from exiting cleanly. Reads also check the `expire` column, so an expired entry is never returned even if the cleaner has not run yet.
+
+| Detail | Value |
+|---|---|
+| Database file | `{dir}/message_store.sqlite` |
+| TTL | 432,000,000 ms (5 days) |
+| Journal mode | WAL |
+| Synchronous mode | NORMAL |
+| L1 cache | 10-minute in-memory `TTLCache` in front of SQLite reads |
+
+## Serialization
+
+`WAProto.IMessage` objects often contain `Buffer` and `Uint8Array` fields (e.g. media thumbnails, encryption keys). The store uses a custom JSON replacer and reviver to preserve these binary types across the serialize/deserialize round-trip:
+
+- `Buffer` instances are serialized as `{ type: 'Buffer', data: number[] }` and restored as `Buffer`.
+- `Uint8Array` instances are serialized as `{ type: 'Uint8Array', data: number[] }` and restored as `Uint8Array`.
+
+All other values pass through `JSON.stringify` / `JSON.parse` unchanged. The serialized string is stored as a UTF-8 encoded `BLOB` in SQLite.
+
+<Tip>
+  You do not need to handle serialization yourself. `resolve()` always returns a
+  fully deserialized `IMessage` with correct `Buffer` and `Uint8Array` instances.
+</Tip>

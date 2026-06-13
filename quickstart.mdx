@@ -1,47 +1,187 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with WABotJS"
+sidebarTitle: "Quickstart"
+description: "Follow this step-by-step guide to install WABotJS, write your first bot, scan the QR code, and have a working WhatsApp bot running in minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through everything you need to go from zero to a running WhatsApp bot: installing the package, writing a minimal bot file with command handling, and connecting to WhatsApp for the first time. The whole process takes only a few minutes.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Prerequisites">
+    Make sure you have **Node.js v24 or later** installed. WABotJS requires it for the built-in `node:sqlite` module used for session persistence.
 
     ```bash
-    npm install your-package
+    node --version
+    # v24.x.x or later
+    ```
+
+    Your project must also be an **ESM module**. If you are starting from scratch, initialise a new project and set the type:
+
+    ```bash
+    mkdir my-bot && cd my-bot
+    npm init -y
+    ```
+
+    Then open `package.json` and add `"type": "module"`:
+
+    ```json package.json
+    {
+      "name": "my-bot",
+      "version": "1.0.0",
+      "type": "module"
+    }
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Install WABotJS">
+    Install the `wabotjs` package using your preferred package manager.
+
+    <CodeGroup>
+      ```bash npm
+      npm install wabotjs
+      ```
+
+      ```bash pnpm
+      pnpm add wabotjs
+      ```
+
+      ```bash yarn
+      yarn add wabotjs
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Create your bot file">
+    Create a file called `bot.ts` (or `bot.js` if you are not using TypeScript) in your project root and paste the following example. It creates a `Bot` instance, registers event handlers, and starts the login flow.
+
+    ```typescript bot.ts
+    import path from 'node:path';
+    import { Bot } from 'wabotjs';
+
+    // A unique identifier for this bot instance — used to namespace stored data.
+    const id = 'my-first-bot';
+
+    // All session data (auth credentials, caches) are stored under this directory.
+    const datadir = path.join(process.cwd(), 'Data', id);
+
+    const bot = new Bot(id, datadir);
+
+    // Use a custom command prefix (default is '/').
+    bot.setPrefix('!');
+
+    // Called whenever an unhandled error occurs inside the bot.
+    bot.onError(async (err) => {
+      console.error('Bot error:', err);
+    });
+
+    // Called when the bot needs you to scan a QR code.
+    // Print it to the terminal — install the 'qrcode' package for a nicer render.
+    bot.onQR(async (qrString) => {
+      console.log('Scan this QR code with WhatsApp:');
+      console.log(qrString);
+    });
+
+    // Called once the connection is established and the bot is online.
+    bot.onOpen(async (user) => {
+      console.log(`Bot connected as: ${user.name} (${user.id})`);
+    });
+
+    // Called when the connection is permanently closed (e.g. logged out).
+    bot.onClose(async (err) => {
+      console.error('Bot disconnected:', err);
+    });
+
+    // Called for every incoming message.
+    bot.onMessage(async (m) => {
+      console.log(`[${m.chat}] ${m.sender}: ${m.text}`);
+    });
+
+    // Called for messages that start with the configured prefix.
+    // The prefix ('!'), command name, and arguments are parsed automatically.
+    bot.onCommand(async (m, prefix, name, args) => {
+      if (name === 'ping') {
+        const start = Date.now();
+        const sent = await m.reply({ text: 'Pong!\n> ...ms' });
+        const elapsed = Date.now() - start;
+        if (sent) {
+          await sent.edit({ text: `Pong!\n> ${elapsed}ms` });
+        }
+        return;
+      }
+
+      if (name === 'echo') {
+        await m.reply({ text: args.length > 0 ? args.join(' ') : 'Hello, World!' });
+        return;
+      }
+
+      await m.reply({ text: `Unknown command: ${prefix}${name}` });
+    });
+
+    // Start the login process. Triggers onQR (or onOTP for phone pairing).
+    await bot.login();
+    ```
+
+    <Note>
+      The `id` string is used to namespace SQLite databases and auth files inside `datadir`. Use a stable, unique identifier — changing it will invalidate a stored session.
+    </Note>
+  </Step>
+
+  <Step title="Run the bot">
+    If you are using TypeScript, the easiest way to run the file directly (without a compile step) is with [`tsx`](https://github.com/privatenumber/tsx):
 
     ```bash
-    your-cli init
+    npx tsx bot.ts
+    ```
+
+    Alternatively, compile first with `tsc` and then run the output:
+
+    ```bash
+    npx tsc && node dist/bot.js
+    ```
+
+    For plain JavaScript (`bot.js`), run it directly:
+
+    ```bash
+    node bot.js
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
-    ```
+  <Step title="Scan the QR code and connect">
+    When `bot.login()` is called for the first time, WABotJS fetches the latest WhatsApp Web version, opens a WebSocket connection, and emits a QR string via your `onQR` handler. The QR is printed to your terminal.
+
+    1. Open **WhatsApp** on your phone.
+    2. Go to **Linked Devices → Link a Device**.
+    3. Scan the QR code shown in your terminal.
+
+    Once authenticated, the `onOpen` handler fires with your account's contact info, and the bot is live. Your session is automatically saved to the SQLite database in `datadir` — on the next run the bot reconnects without showing a QR again.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+<Note>
+  **Phone-number OTP pairing** — if you prefer not to scan a QR code, pass your phone number (in E.164 format) to `login()`. WABotJS will request an 8-digit pairing code from WhatsApp and deliver it to your `onOTP` handler.
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+  ```typescript
+  bot.onOTP(async (code) => {
+    console.log('Enter this code in WhatsApp → Linked Devices → Link with phone number:', code);
+  });
+
+  await bot.login('+12345678900');
+  ```
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/guides/authentication">
+    Deep-dive into QR and OTP pairing modes, session management, and logout.
+  </Card>
+  <Card title="Command Routing" icon="terminal" href="/guides/command-routing">
+    Learn how to organise commands, change the prefix, and handle arguments.
+  </Card>
+  <Card title="Handling Messages" icon="message" href="/guides/handling-messages">
+    Reply, react, read, delete, edit, and download media from incoming messages.
+  </Card>
+  <Card title="Bot API Reference" icon="book" href="/api/bot">
+    Complete reference for every method and event on the `Bot` class.
+  </Card>
+</CardGroup>

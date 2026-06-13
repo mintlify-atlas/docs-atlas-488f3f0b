@@ -1,0 +1,210 @@
+---
+title: "Caching in WABotJS: LRU, TTL, and SQLite Stores"
+sidebarTitle: "Caching"
+description: "Explore the three cache mechanisms in WABotJS — LRUCache, TTLCache, and SQLiteStore — and how they layer to balance speed with durability."
+---
+
+WABotJS uses three distinct caching primitives that each solve a different problem: bounded in-memory storage with LRU eviction (`LRUCache`), time-limited in-memory storage that cleans itself up (`TTLCache`), and durable SQLite-backed storage with an optional TTL and an in-memory read-through layer (`SQLiteStore`). All three are exported under `Utils` and compose together throughout the SDK — understanding them helps you both reason about the built-in bot caches and build your own caching logic.
+
+## Overview
+
+<CardGroup cols={3}>
+  <Card title="LRUCache" icon="arrows-rotate">
+    In-memory. Bounded by a fixed capacity. Evicts the least-recently-used entry when full. O(1) reads and writes.
+  </Card>
+  <Card title="TTLCache" icon="clock">
+    In-memory. Entries expire after a configurable time-to-live. A background interval sweeps stale entries and stops itself when the cache is empty.
+  </Card>
+  <Card title="SQLiteStore" icon="database">
+    Persistent SQLite file. Optional TTL via an `expire` column. Uses a `TTLCache` as an L1 read-through layer so hot keys never touch the disk.
+  </Card>
+</CardGroup>
+
+---
+
+## LRUCache
+
+`Utils.LRUCache<V>` is a capacity-bounded, in-memory key-value store. It is backed by a single JavaScript `Map`, which preserves insertion order. Eviction exploits that property: when the cache exceeds its capacity the first (oldest-accessed) key in the `Map` is deleted. On every `get` the accessed entry is deleted and re-inserted at the tail so it becomes the most-recently-used, giving true O(1) LRU behaviour without a linked list.
+
+### Constructor
+
+```typescript
+import { Utils } from 'wabotjs';
+
+const cache = new Utils.LRUCache<string>(500); // capacity: 500 entries
+```
+
+### Public API
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `set` | `(key: string, value: V) => this` | Inserts or updates a key. Evicts the LRU entry if at capacity. |
+| `get` | `(key: string) => V \| undefined` | Returns the value and promotes the entry to most-recently-used. |
+| `del` | `(key: string) => boolean` | Removes a key. Returns `true` if it existed. |
+| `has` | `(key: string) => boolean` | Returns `true` if the key is present (no promotion). |
+| `keys` | `() => string[]` | Returns all keys in insertion order. |
+| `values` | `() => V[]` | Returns all values in insertion order. |
+| `entries` | `() => [string, V][]` | Returns all `[key, value]` pairs in insertion order. |
+| `clear` | `() => void` | Removes all entries. |
+| `size` | `number` (getter) | Current number of entries. |
+
+<Tip>
+  `LRUCache` does not implement any TTL logic. If you need entries to expire automatically, use `TTLCache` instead.
+</Tip>
+
+---
+
+## TTLCache
+
+`Utils.TTLCache<V>` is an in-memory key-value store where every entry carries an absolute expiry timestamp (`Date.now() + ttl`). Expiry is checked lazily on `has()` and eagerly by a background `setInterval` cleaner that runs every `ttl` milliseconds. The interval is created with `.unref()` so it does not prevent the Node.js process from exiting when nothing else is running.
+
+When the cache becomes empty the cleaner interval stops itself. It restarts automatically the next time `set()` is called.
+
+### Constructor
+
+```typescript
+import { Utils } from 'wabotjs';
+
+// TTL in milliseconds — entries live for 10 minutes
+const cache = new Utils.TTLCache<string>(1000 * 60 * 10);
+```
+
+### Public API
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `set` | `(key: string, value: V) => this` | Inserts or overwrites a key with a fresh expiry timestamp. Starts the cleaner if not running. |
+| `get` | `(key: string) => V \| undefined` | Returns the stored value without checking expiry. Use `has()` first if you need expiry validation. |
+| `del` | `(key: string) => boolean` | Removes a key. Returns `true` if it existed. |
+| `has` | `(key: string) => boolean` | Returns `true` only if the key exists **and** has not expired. |
+| `keys` | `() => string[]` | Returns all non-expired keys. |
+| `values` | `() => V[]` | Returns all non-expired values. |
+| `entries` | `() => [string, V][]` | Returns all non-expired `[key, value]` pairs. |
+| `clear` | `() => void` | Removes all entries and stops the cleaner. |
+| `size` | `number` (getter) | Current number of non-expired entries. |
+
+<Note>
+  `get()` does not filter by expiry — it returns whatever is in the internal `Map`. Always use `has()` before `get()` if you care about TTL correctness, or rely on the cleaner to evict stale entries between calls.
+</Note>
+
+---
+
+## SQLiteStore
+
+`Utils.SQLiteStore` provides durable, file-backed key-value storage using Node.js's built-in `node:sqlite` module. All values are stored as `Uint8Array` blobs, giving you complete freedom over serialisation format. When a `ttl` is provided the table gains an `expire` column and a background interval purges rows whose expiry has passed (running at most every 30 minutes). A `TTLCache` with a 10-minute TTL (or the store's own TTL if shorter) sits in front as an L1 cache, so repeated reads of hot keys never hit the disk.
+
+The database is always opened with:
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+```
+
+WAL mode allows concurrent reads while a write is in progress; `NORMAL` synchronous reduces fsync overhead without sacrificing crash consistency for most workloads.
+
+### Constructor
+
+```typescript
+import { Utils } from 'wabotjs';
+
+// Without TTL — entries live forever
+const store = new Utils.SQLiteStore('./data', 'my_store');
+
+// With TTL — entries expire after 5 days
+const storeWithTTL = new Utils.SQLiteStore('./data', 'my_store', 1000 * 60 * 60 * 24 * 5);
+```
+
+`name` must match `/^[a-z0-9_]+$/`. The resulting SQLite file is written to `{dir}/{name}.sqlite`.
+
+### Public API
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `initialize` | `() => void` | Opens the SQLite file, runs `PRAGMA` and `CREATE TABLE` statements, starts the TTL cleaner if applicable. |
+| `drop` | `() => void` | Closes the database, clears the L1 cache, and deletes the `.sqlite`, `.sqlite-wal`, and `.sqlite-shm` files. |
+| `set` | `(key: string, value: Uint8Array) => void` | Upserts a row. Writes to both L1 and L2 (SQLite). |
+| `get` | `(key: string) => Uint8Array \| undefined` | Reads from L1 first; falls back to SQLite and back-fills L1 on a hit. |
+| `del` | `(key: string) => void` | Removes the key from both L1 and SQLite. |
+| `has` | `(key: string) => boolean` | Checks L1, then falls back to `get()`. |
+| `keys` | `() => string[]` | Returns all non-expired keys from SQLite. |
+| `values` | `() => Uint8Array[]` | Returns all non-expired values from SQLite. |
+| `entries` | `() => { key: string; value: Uint8Array }[]` | Returns all non-expired rows from SQLite. |
+
+<Tip>
+  You do not need to call `SQLiteStore.initialize()` manually when using WABotJS. The JID and Message stores call it automatically during `bot.login()` via their internal `bind(sock)` method. The Auth store calls it via `auth.load()`.
+</Tip>
+
+---
+
+## Bot caches
+
+`Bot` creates three cache instances at construction time, accessible via `bot.cache`:
+
+<CardGroup cols={1}>
+  <Card title="bot.cache.jid — JID Store" icon="address-book">
+    A `Stores.JID` instance backed by `SQLiteStore` with **no TTL**. Stores bidirectional LID↔PN mappings permanently. Populated automatically from socket events during the bot's lifetime.
+  </Card>
+  <Card title="bot.cache.message — Message Store" icon="message">
+    A `Stores.Message` instance backed by `SQLiteStore` with a **5-day TTL** (`MSG_STORE_TTL = 432,000,000 ms`). Used by Baileys' `getMessage` callback for retry and history-sync decryption.
+  </Card>
+  <Card title="bot.cache.metadata — Group Metadata Cache" icon="people-group">
+    A `Utils.TTLCache<GroupMetadata>` with a **10-minute TTL**. Populated lazily: `cachedGroupMetadata` checks this cache first, then falls back to `sock.groupMetadata()` on a miss and stores the result.
+  </Card>
+</CardGroup>
+
+```typescript
+// Read the bot's own JID mapping
+const mapping = bot.cache.jid.resolve('15551234567@s.whatsapp.net');
+// → { lid: '1234...@lid', pn: '15551234567@s.whatsapp.net' } | undefined
+
+// Check whether a message is still in the 5-day window
+const proto = bot.cache.message.resolve(messageId);
+// → WAProto.IMessage | undefined
+
+// Check whether group metadata is cached
+if (bot.cache.metadata.has(groupJid)) {
+  const meta = bot.cache.metadata.get(groupJid);
+}
+```
+
+---
+
+## Using caches in your bot
+
+You can use `Utils.TTLCache` directly for your own application-level caching needs without any extra dependencies.
+
+```typescript
+import { Utils } from 'wabotjs';
+
+// Cache API responses for 2 minutes
+const apiCache = new Utils.TTLCache<{ price: number }>(1000 * 60 * 2);
+
+bot.onCommand(async (m, prefix, name, args) => {
+  if (name === 'price') {
+    const symbol = args[0]?.toUpperCase();
+    if (!symbol) return;
+
+    if (apiCache.has(symbol)) {
+      const cached = apiCache.get(symbol)!;
+      await m.reply(`${symbol}: $${cached.price} (cached)`);
+      return;
+    }
+
+    // Fetch from external API (example only)
+    const data = await fetchPrice(symbol);
+    apiCache.set(symbol, data);
+    await m.reply(`${symbol}: $${data.price}`);
+  }
+});
+```
+
+Similarly, `Utils.LRUCache` is useful when you have a fixed-size working set and want to bound memory usage regardless of how many unique keys arrive:
+
+```typescript
+import { Utils } from 'wabotjs';
+
+// Keep at most 1000 user preference objects in memory
+const prefs = new Utils.LRUCache<{ theme: string }>(1000);
+
+prefs.set('15551234567@s.whatsapp.net', { theme: 'dark' });
+const p = prefs.get('15551234567@s.whatsapp.net'); // promotes to MRU
+```

@@ -1,0 +1,274 @@
+---
+title: "Utils Helpers — Converters, Assertions, and JID Utilities"
+sidebarTitle: "Helpers"
+description: "Utility functions for value conversion, type assertions, JID resolution, and async helpers exported from WABotJS."
+---
+
+WABotJS exports a collection of general-purpose helper functions under the `Utils` namespace, along with shared constants under `Constants`. These utilities are used internally throughout the SDK and are also available to application code. They cover four areas: converting arbitrary values to common types, asserting the type of function arguments, resolving WhatsApp JID identifiers, and simple async primitives.
+
+## Import
+
+```typescript
+import { Utils, Constants } from 'wabotjs';
+```
+
+---
+
+## Converters
+
+### `Utils.toString(value)`
+
+```typescript
+Utils.toString(value: unknown): string
+```
+
+Converts any value to a string using the following rules:
+
+- If the value is already a `string`, it is returned as-is.
+- If the value is an object (and not `null`), it is serialized with `JSON.stringify`.
+- All other values (numbers, booleans, `null`, `undefined`, etc.) are converted with `String()`.
+
+```typescript
+Utils.toString('hello');         // 'hello'
+Utils.toString(42);              // '42'
+Utils.toString({ a: 1 });       // '{"a":1}'
+Utils.toString(null);            // 'null'
+Utils.toString(undefined);       // 'undefined'
+```
+
+### `Utils.toError(value)`
+
+```typescript
+Utils.toError(value: unknown): Error
+```
+
+Ensures the return value is always an `Error` instance:
+
+- If `value` is already an `Error`, it is returned unchanged.
+- Otherwise, `Utils.toString(value)` is called on it and the result is wrapped in `new Error(...)`.
+
+This is useful in `catch` blocks where the caught value may be any type.
+
+```typescript
+try {
+  JSON.parse('bad json');
+} catch (err) {
+  const error = Utils.toError(err);
+  console.error(error.message); // SyntaxError message string
+}
+
+Utils.toError('something went wrong');
+// Error: 'something went wrong'
+
+Utils.toError(404);
+// Error: '404'
+```
+
+---
+
+## Type Assertions
+
+All assertion functions return `true` (narrowing the TypeScript type of the first argument) when the check passes, or throw a `TypeError` with a descriptive message when it fails. The error message includes the expected type, the `name` parameter you provide, and the actual type or constructor name received.
+
+### `Utils.assertString(param, name)`
+
+```typescript
+Utils.assertString(param: unknown, name: string): param is string
+```
+
+Throws `TypeError` if `param` is not a `string`.
+
+```typescript
+function greet(value: unknown) {
+  Utils.assertString(value, 'value');
+  return `Hello, ${value}`;
+}
+
+greet('Alice');   // 'Hello, Alice'
+greet(123);       // TypeError: expected value to be a string, but got number
+```
+
+### `Utils.assertNumber(param, name)`
+
+```typescript
+Utils.assertNumber(param: unknown, name: string): param is number
+```
+
+Throws `TypeError` if `param` is not a `number` or is `NaN`.
+
+```typescript
+Utils.assertNumber(42, 'count');    // passes
+Utils.assertNumber(NaN, 'count');   // TypeError
+Utils.assertNumber('5', 'count');   // TypeError
+```
+
+### `Utils.assertBuffer(param, name)`
+
+```typescript
+Utils.assertBuffer(param: unknown, name: string): param is Buffer
+```
+
+Throws `TypeError` if `param` is not a Node.js `Buffer` instance.
+
+```typescript
+const buf = Buffer.from('hello');
+Utils.assertBuffer(buf, 'buf');           // passes
+Utils.assertBuffer(new Uint8Array(4), 'buf'); // TypeError
+```
+
+### `Utils.assertUint8Array(param, name)`
+
+```typescript
+Utils.assertUint8Array(param: unknown, name: string): param is Uint8Array
+```
+
+Throws `TypeError` if `param` is not a `Uint8Array` instance. Note that `Buffer` is a subclass of `Uint8Array`, so `Buffer` instances also pass this check.
+
+```typescript
+Utils.assertUint8Array(new Uint8Array(8), 'data'); // passes
+Utils.assertUint8Array(Buffer.from('hi'), 'data'); // passes (Buffer extends Uint8Array)
+Utils.assertUint8Array([1, 2, 3], 'data');         // TypeError
+```
+
+### `Utils.assertFunction(param, name)`
+
+```typescript
+Utils.assertFunction(param: unknown, name: string): param is Function
+```
+
+Throws `TypeError` if `param` is not callable.
+
+```typescript
+Utils.assertFunction(() => {}, 'handler');  // passes
+Utils.assertFunction(null, 'handler');       // TypeError
+```
+
+---
+
+## JID Utilities
+
+WhatsApp uses two parallel JID formats: LID JIDs (`@lid`) and PN (phone-number) JIDs (`@s.whatsapp.net`). These helpers scan a variadic argument list and extract or pair the relevant JID strings, normalizing them via Baileys' `jidNormalizedUser`.
+
+### `Utils.resolveLID(...args)`
+
+```typescript
+Utils.resolveLID(...args: unknown[]): string | undefined
+```
+
+Scans `args` for the first string that is a LID JID (identified via Baileys' `isLidUser`). Returns the normalized LID JID, or `undefined` if none is found.
+
+```typescript
+const lid = Utils.resolveLID(
+  '123456789@lid',
+  '1234567890@s.whatsapp.net',
+);
+console.log(lid); // '123456789@lid' (normalized)
+
+Utils.resolveLID('only-a-pn@s.whatsapp.net'); // undefined
+```
+
+### `Utils.resolvePN(...args)`
+
+```typescript
+Utils.resolvePN(...args: unknown[]): string | undefined
+```
+
+Scans `args` for the first string that is a PN JID (identified via Baileys' `isPnUser`). Returns the normalized PN JID, or `undefined` if none is found.
+
+```typescript
+const pn = Utils.resolvePN(
+  '123456789@lid',
+  '1234567890@s.whatsapp.net',
+);
+console.log(pn); // '1234567890@s.whatsapp.net' (normalized)
+```
+
+### `Utils.resolveLIDAndPN(...args)`
+
+```typescript
+Utils.resolveLIDAndPN(...args: unknown[]): { lid: string; pn: string } | undefined
+```
+
+Calls both `resolveLID` and `resolvePN` on the same argument list. Returns an object containing both the normalized LID and PN JIDs if **both** are found in `args`, or `undefined` if either is missing.
+
+<ResponseField name="lid" type="string">
+  The normalized LID JID extracted from `args`.
+</ResponseField>
+
+<ResponseField name="pn" type="string">
+  The normalized PN JID extracted from `args`.
+</ResponseField>
+
+```typescript
+const result = Utils.resolveLIDAndPN(
+  m.key.remoteJid,
+  m.key.remoteJidAlt,
+);
+
+if (result) {
+  console.log(result.lid); // '123456789@lid'
+  console.log(result.pn);  // '1234567890@s.whatsapp.net'
+}
+```
+
+<Tip>
+  Pass all available JID candidates at once — `resolveLIDAndPN` will find the
+  right pair regardless of argument order, since it identifies each JID type
+  independently. Non-string values in `args` are silently ignored.
+</Tip>
+
+---
+
+## Async
+
+### `Utils.delay(ms)`
+
+```typescript
+Utils.delay(ms: number): Promise<void>
+```
+
+Returns a `Promise` that resolves after `ms` milliseconds. A thin wrapper around `setTimeout` that integrates cleanly with `async`/`await`. Throws `TypeError` via `assertNumber` if `ms` is not a valid number.
+
+<ParamField path="ms" type="number" required>
+  Number of milliseconds to wait. Must be a valid, non-NaN number.
+</ParamField>
+
+```typescript
+async function pollWithBackoff() {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const result = await fetchSomething();
+    if (result) return result;
+
+    await Utils.delay(1_000 * Math.pow(2, attempt)); // exponential back-off
+  }
+}
+```
+
+---
+
+## Constants
+
+### `Constants.USER_AGENT`
+
+```typescript
+Constants.USER_AGENT: string
+// 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0'
+```
+
+The Firefox/Ubuntu User-Agent string used internally for WhatsApp Web HTTP requests. Exposed so application code can reuse the same UA string for any supplementary requests that must match the WA Web client fingerprint.
+
+### `Constants.MSG_STORE_TTL`
+
+```typescript
+Constants.MSG_STORE_TTL: number
+// 432_000_000
+```
+
+The time-to-live for the `Stores.Message` store, in milliseconds. Equals five days (`1000 × 60 × 60 × 24 × 5 = 432,000,000`). Messages cached by the message store are automatically purged after this duration.
+
+```typescript
+import { Constants } from 'wabotjs';
+
+console.log(Constants.MSG_STORE_TTL);           // 432000000
+console.log(Constants.MSG_STORE_TTL / 86_400_000); // 5 (days)
+```
